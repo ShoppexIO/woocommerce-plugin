@@ -100,14 +100,24 @@ class Shoppex_Webhook_Handler {
 	private static function apply_event( $order, $event, array $data ) {
 		$status = isset( $data['status'] ) ? strtoupper( (string) $data['status'] ) : '';
 
-		// Short-circuit: once an order reaches a terminal state on our side we
-		// don't flip-flop it on out-of-order webhook arrivals.
-		if ( in_array( $order->get_status(), array( 'completed', 'refunded', 'cancelled' ), true )
+		// Short-circuit: once an order is paid, refunded, or cancelled on our
+		// side we don't flip-flop it on out-of-order webhook arrivals.
+		// `processing` + `completed` both mean "paid" in WooCommerce — the
+		// distinction is whether the product ships (processing = physical to
+		// ship; completed = virtual/downloadable). Both must be protected from
+		// a late `order:cancelled` from Shoppex.
+		$paid_or_terminal = array_merge(
+			array( 'processing', 'completed', 'refunded', 'cancelled' ),
+			(array) wc_get_is_paid_statuses()
+		);
+		$paid_or_terminal = array_unique( array_filter( $paid_or_terminal ) );
+
+		if ( in_array( $order->get_status(), $paid_or_terminal, true )
 			&& 'order:paid' !== $event ) {
 			$order->add_order_note(
 				sprintf(
 					/* translators: 1: event name, 2: status code. */
-					__( 'Shoppex Pay: ignored webhook %1$s (status %2$s) — order already in a terminal state.', 'shoppex-pay' ),
+					__( 'Shoppex Pay: ignored webhook %1$s (status %2$s) — order already paid or in a terminal state.', 'shoppex-pay' ),
 					$event,
 					$status
 				)
