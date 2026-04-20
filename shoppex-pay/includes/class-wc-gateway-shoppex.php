@@ -12,9 +12,9 @@ defined( 'ABSPATH' ) || exit;
  */
 class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 
-	const META_UNIQID        = '_shoppex_uniqid';
-	const META_SESSION_URL   = '_shoppex_session_url';
-	const META_LAST_STATUS   = '_shoppex_last_status';
+	const META_UNIQID         = '_shoppex_uniqid';
+	const META_SESSION_URL    = '_shoppex_session_url';
+	const META_LAST_STATUS    = '_shoppex_last_status';
 	const META_PAYMENT_METHOD = '_shoppex_payment_method';
 
 	/**
@@ -141,10 +141,10 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 				'desc_tip'    => true,
 			),
 			'debug'          => array(
-				'title'       => __( 'Debug logging', 'shoppex-pay' ),
-				'type'        => 'checkbox',
-				'label'       => __( 'Log API requests and webhook events to the WooCommerce logs', 'shoppex-pay' ),
-				'default'     => 'no',
+				'title'   => __( 'Debug logging', 'shoppex-pay' ),
+				'type'    => 'checkbox',
+				'label'   => __( 'Log API requests and webhook events to the WooCommerce logs', 'shoppex-pay' ),
+				'default' => 'no',
 			),
 		);
 	}

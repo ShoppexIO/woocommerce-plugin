@@ -68,7 +68,13 @@ class Shoppex_Webhook_Handler {
 			self::log( $gateway, sprintf( 'Webhook %s: no matching WC order found.', $event ) );
 			// We ACK so the webhook doesn't get retried forever — unknown orders
 			// are not a transient condition.
-			self::respond( array( 'ok' => true, 'matched' => false ), 200 );
+			self::respond(
+				array(
+					'ok'      => true,
+					'matched' => false,
+				),
+				200
+			);
 			return;
 		}
 

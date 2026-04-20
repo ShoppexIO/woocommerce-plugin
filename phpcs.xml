@@ -18,7 +18,9 @@
 
   <rule ref="WordPress.WP.I18n">
     <properties>
-      <property name="text_domain" type="array" value="shoppex-pay"/>
+      <property name="text_domain" type="array">
+        <element value="shoppex-pay"/>
+      </property>
     </properties>
   </rule>
 
