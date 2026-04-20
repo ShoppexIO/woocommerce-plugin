@@ -10,3 +10,5 @@ composer.lock
 build/
 dist/
 *.zip
+shoppex-pay/tests-tmp/
+tmp-e2e/

@@ -4,7 +4,7 @@ Tags: payment gateway, woocommerce, crypto, paypal, stripe
 Requires at least: 6.2
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 WC requires at least: 7.0
 WC tested up to: 9.5
 License: MIT
@@ -67,6 +67,10 @@ Shoppex is a hosted checkout. This means we handle PCI compliance, fraud checks,
 
 == Changelog ==
 
+= 1.0.1 =
+* Fix: `processing` status and all WC paid statuses are now protected from late `order:cancelled` webhooks. Previously a delayed cancellation event could flip a paid order back to cancelled.
+* Add: `shoppex_pay_api_base` filter for local development / E2E testing.
+
 = 1.0.0 =
 * Initial release.
 * Hosted checkout redirect via `POST /dev/v1/checkout/sessions`.
@@ -76,6 +80,9 @@ Shoppex is a hosted checkout. This means we handle PCI compliance, fraud checks,
 * Refund support for Stripe and PayPal orders.
 
 == Upgrade Notice ==
+
+= 1.0.1 =
+Fixes a webhook race condition that could cancel an already-paid order. Recommended for all users.
 
 = 1.0.0 =
 Initial release.

@@ -3,7 +3,7 @@
  * Plugin Name:          Shoppex Pay for WooCommerce
  * Plugin URI:           https://github.com/ShoppexIO/woocommerce-plugin
  * Description:          Accept payments in WooCommerce via Shoppex: Stripe, PayPal, Cryptocurrencies (Bitcoin, Ethereum, Litecoin, Solana, USDT, and more), SumUp, Square, CashApp, and other gateways configured in your Shoppex account.
- * Version:              1.0.0
+ * Version:              1.0.1
  * Requires at least:    6.2
  * Requires PHP:         7.4
  * Author:               Shoppex
@@ -20,7 +20,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'SHOPPEX_PAY_VERSION', '1.0.0' );
+define( 'SHOPPEX_PAY_VERSION', '1.0.1' );
 define( 'SHOPPEX_PAY_PLUGIN_FILE', __FILE__ );
 define( 'SHOPPEX_PAY_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'SHOPPEX_PAY_PLUGIN_URL', plugin_dir_url( __FILE__ ) );

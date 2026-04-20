@@ -155,7 +155,14 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 	 * @return Shoppex_Api_Client
 	 */
 	public function api() {
-		return new Shoppex_Api_Client( $this->api_key, SHOPPEX_PAY_API_BASE, $this->debug );
+		/**
+		 * Filter the Shoppex API base URL. Production default is `https://api.shoppex.io`.
+		 * Override only for local development / E2E tests.
+		 *
+		 * @param string $api_base Base URL without trailing slash.
+		 */
+		$api_base = apply_filters( 'shoppex_pay_api_base', SHOPPEX_PAY_API_BASE );
+		return new Shoppex_Api_Client( $this->api_key, $api_base, $this->debug );
 	}
 
 	/**
