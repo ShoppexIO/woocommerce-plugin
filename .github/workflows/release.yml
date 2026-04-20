@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  zip:
+    name: Build release ZIP
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ZIP
+        run: |
+          zip -r shoppex-pay.zip shoppex-pay -x 'shoppex-pay/.*' -x '*.DS_Store'
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: shoppex-pay.zip
