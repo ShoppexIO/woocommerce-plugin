@@ -4,3 +4,5 @@
  *
  * @package Shoppex_Pay
  */
+
+defined( 'ABSPATH' ) || exit;
