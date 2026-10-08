@@ -32,11 +32,11 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 	public $webhook_secret;
 
 	/**
-	 * White-label hosted checkout toggle.
+	 * Checkout display: `redirect` (full page) or `overlay` (embed window).
 	 *
-	 * @var bool
+	 * @var string
 	 */
-	public $white_label;
+	public $checkout_display;
 
 	/**
 	 * Order title prefix.
@@ -73,11 +73,13 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		$this->description    = $this->get_option( 'description', __( 'Pay with credit card, PayPal, cryptocurrencies, and more via Shoppex.', 'shoppex-pay' ) );
 		$this->api_key        = trim( (string) $this->get_option( 'api_key' ) );
 		$this->webhook_secret = trim( (string) $this->get_option( 'webhook_secret' ) );
-		$this->white_label    = 'yes' === $this->get_option( 'white_label', 'no' );
 		$this->order_prefix   = (string) $this->get_option( 'order_prefix', 'WC Order #' );
 		$this->debug          = 'yes' === $this->get_option( 'debug', 'no' );
 
+		$this->checkout_display = 'overlay' === $this->get_option( 'checkout_display', 'redirect' ) ? 'overlay' : 'redirect';
+
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
+		add_action( 'woocommerce_receipt_' . $this->id, array( $this, 'receipt_page' ) );
 	}
 
 	/**
@@ -87,60 +89,64 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		$webhook_url = add_query_arg( 'wc-api', 'shoppex_webhook', home_url( '/' ) );
 
 		$this->form_fields = array(
-			'enabled'        => array(
+			'enabled'          => array(
 				'title'   => __( 'Enable/Disable', 'shoppex-pay' ),
 				'type'    => 'checkbox',
 				'label'   => __( 'Enable Shoppex Pay', 'shoppex-pay' ),
 				'default' => 'no',
 			),
-			'title'          => array(
+			'title'            => array(
 				'title'       => __( 'Title', 'shoppex-pay' ),
 				'type'        => 'text',
 				'description' => __( 'Shown to the customer at checkout.', 'shoppex-pay' ),
 				'default'     => __( 'Shoppex Pay', 'shoppex-pay' ),
 				'desc_tip'    => true,
 			),
-			'description'    => array(
+			'description'      => array(
 				'title'       => __( 'Description', 'shoppex-pay' ),
 				'type'        => 'textarea',
 				'description' => __( 'Shown below the title at checkout.', 'shoppex-pay' ),
 				'default'     => __( 'Pay with credit card, PayPal, cryptocurrencies, and more via Shoppex.', 'shoppex-pay' ),
 			),
-			'api_key'        => array(
+			'api_key'          => array(
 				'title'       => __( 'API Key', 'shoppex-pay' ),
 				'type'        => 'password',
 				'description' => sprintf(
 					/* translators: %s: link to the Shoppex developer dashboard. */
-					__( 'Your Shoppex Dev API key. Create one in the %s (Settings → Developer Tools).', 'shoppex-pay' ),
-					'<a href="https://dashboard.shoppex.io/store/settings?tab=developer" target="_blank" rel="noopener">Shoppex dashboard</a>'
+					__( 'Your Shoppex Dev API key with the payments.write and orders.write scopes. Create one in the %s.', 'shoppex-pay' ),
+					'<a href="https://dashboard.shoppex.io/settings/developer/api-keys" target="_blank" rel="noopener">Shoppex dashboard</a>'
 				),
 				'default'     => '',
 			),
-			'webhook_secret' => array(
+			'webhook_secret'   => array(
 				'title'       => __( 'Webhook Secret', 'shoppex-pay' ),
 				'type'        => 'password',
 				'description' => sprintf(
-					/* translators: %s: webhook URL. */
-					__( 'HMAC-SHA512 shared secret from your Shoppex webhook. Register this URL in the Shoppex dashboard: %s', 'shoppex-pay' ),
-					'<code>' . esc_html( $webhook_url ) . '</code>'
+					/* translators: 1: webhook URL, 2: link to the Shoppex webhook settings. */
+					__( 'Secret of your Shoppex webhook. Register %1$s in the %2$s for order:paid, order:partial, order:cancelled, order:disputed and order:updated.', 'shoppex-pay' ),
+					'<code>' . esc_html( $webhook_url ) . '</code>',
+					'<a href="https://dashboard.shoppex.io/settings/developer/webhooks" target="_blank" rel="noopener">Shoppex dashboard</a>'
 				),
 				'default'     => '',
 			),
-			'white_label'    => array(
-				'title'       => __( 'White-label checkout', 'shoppex-pay' ),
-				'type'        => 'checkbox',
-				'label'       => __( 'Use a branded (white-label) hosted checkout URL', 'shoppex-pay' ),
-				'description' => __( 'Requires the feature to be enabled on your Shoppex account. Leave off if unsure.', 'shoppex-pay' ),
-				'default'     => 'no',
+			'checkout_display' => array(
+				'title'       => __( 'Checkout display', 'shoppex-pay' ),
+				'type'        => 'select',
+				'description' => __( 'Overlay window opens the Shoppex payment in a window on your order payment page. The customer can always continue on the full payment page instead.', 'shoppex-pay' ),
+				'default'     => 'redirect',
+				'options'     => array(
+					'redirect' => __( 'Redirect', 'shoppex-pay' ),
+					'overlay'  => __( 'Overlay window', 'shoppex-pay' ),
+				),
 			),
-			'order_prefix'   => array(
+			'order_prefix'     => array(
 				'title'       => __( 'Order title prefix', 'shoppex-pay' ),
 				'type'        => 'text',
 				'description' => __( 'Prefix shown on the Shoppex hosted checkout page, e.g. "WC Order #" will display "WC Order #1234".', 'shoppex-pay' ),
 				'default'     => 'WC Order #',
 				'desc_tip'    => true,
 			),
-			'debug'          => array(
+			'debug'            => array(
 				'title'   => __( 'Debug logging', 'shoppex-pay' ),
 				'type'    => 'checkbox',
 				'label'   => __( 'Log API requests and webhook events to the WooCommerce logs', 'shoppex-pay' ),
@@ -198,7 +204,6 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 				'wc_order_key' => (string) $order->get_order_key(),
 				'source'       => 'woocommerce',
 			),
-			'white_label'    => $this->white_label,
 		);
 
 		/**
@@ -209,7 +214,11 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		 */
 		$payload = apply_filters( 'shoppex_pay_checkout_session_payload', $payload, $order );
 
-		$response = $this->api()->create_checkout_session( $payload, 'woo_order_' . $order->get_id() );
+		// WooCommerce reuses a pending order when the customer returns to the
+		// checkout with a changed cart. Shoppex refuses a reused key with a new
+		// body, so the key follows the payload: same payload, same session.
+		$idempotency_key = 'woo_order_' . $order->get_id() . '_' . substr( hash( 'sha256', (string) wp_json_encode( $payload ) ), 0, 16 );
+		$response        = $this->api()->create_checkout_session( $payload, $idempotency_key );
 
 		if ( ! $response['ok'] || empty( $response['data']['url'] ) ) {
 			$message = $response['error'] ? $response['error'] : __( 'Could not start Shoppex checkout.', 'shoppex-pay' );
@@ -240,8 +249,60 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 
 		return array(
 			'result'   => 'success',
-			'redirect' => $data['url'],
+			// The order payment page opens the overlay and links the full page.
+			'redirect' => 'overlay' === $this->checkout_display ? $order->get_checkout_payment_url( true ) : $data['url'],
 		);
+	}
+
+	/**
+	 * Order payment page in overlay mode: open the Shoppex invoice in the embed
+	 * window. The page keeps a link to the full payment page, and shows it as
+	 * the way forward when the embed script cannot load. Payment status still
+	 * comes only from the signed webhook.
+	 *
+	 * @param int $order_id WC order ID.
+	 */
+	public function receipt_page( $order_id ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return;
+		}
+
+		$uniqid      = (string) $order->get_meta( self::META_UNIQID );
+		$session_url = (string) $order->get_meta( self::META_SESSION_URL );
+		if ( ! $order->needs_payment() || '' === $uniqid || '' === $session_url ) {
+			return;
+		}
+
+		/**
+		 * Filter the Shoppex checkout origin the overlay loads. Production default
+		 * is `https://checkout.shoppex.io`. Override only for local development.
+		 *
+		 * @param string $checkout_base Base URL without trailing slash.
+		 */
+		$checkout_base = untrailingslashit( apply_filters( 'shoppex_pay_checkout_base', SHOPPEX_PAY_CHECKOUT_BASE ) );
+
+		// The embed script URL is mutable by design (no version, no SRI).
+		wp_enqueue_script( 'shoppex-embed', $checkout_base . '/embed/embed.iife.js', array(), null, true ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion
+		wp_enqueue_script( 'shoppex-pay-overlay', SHOPPEX_PAY_PLUGIN_URL . 'assets/js/overlay.js', array( 'shoppex-embed' ), SHOPPEX_PAY_VERSION, true );
+		wp_add_inline_script(
+			'shoppex-pay-overlay',
+			'window.shoppexPayOverlay = ' . wp_json_encode(
+				array(
+					'invoiceId'       => $uniqid,
+					'checkoutBaseUrl' => $checkout_base,
+					'returnUrl'       => $this->get_return_url( $order ),
+				)
+			) . ';',
+			'before'
+		);
+		?>
+		<div id="shoppex-pay-overlay">
+			<p data-shoppex-pay-error hidden role="alert"><?php esc_html_e( 'The payment window could not open. Continue on the Shoppex payment page.', 'shoppex-pay' ); ?></p>
+			<button type="button" class="button alt" data-shoppex-pay-open><?php esc_html_e( 'Pay now', 'shoppex-pay' ); ?></button>
+			<a class="button" href="<?php echo esc_url( $session_url ); ?>"><?php esc_html_e( 'Open the payment page instead', 'shoppex-pay' ); ?></a>
+		</div>
+		<?php
 	}
 
 	/**
@@ -268,7 +329,22 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 			);
 		}
 
-		$response = $this->api()->refund_order( $uniqid, $amount, $reason );
+		// WooCommerce saved this refund before calling the gateway and deletes it
+		// again when the call fails. The refund count therefore keeps the key
+		// stable across a retry (a timed-out call that did refund replays its
+		// result) and distinct for a second refund of the same amount.
+		$refund_count = count(
+			wc_get_orders(
+				array(
+					'type'   => 'shop_order_refund',
+					'parent' => $order->get_id(),
+					'limit'  => -1,
+					'return' => 'ids',
+				)
+			)
+		);
+		$key          = 'woo_refund_' . $uniqid . '_' . $refund_count . '_' . ( null === $amount ? 'full' : (string) $amount );
+		$response     = $this->api()->refund_order( $uniqid, $amount, $reason, $key );
 
 		if ( $response['ok'] ) {
 			$order->add_order_note(
@@ -284,8 +360,8 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		$error = $response['error'] ? $response['error'] : __( 'Unknown error', 'shoppex-pay' );
 		if ( false !== stripos( $error, 'refunds are not supported' ) ) {
 			$dashboard_link = sprintf(
-				'<a href="https://dashboard.shoppex.io/store/orders/%s" target="_blank" rel="noopener">%s</a>',
-				esc_attr( $uniqid ),
+				'<a href="https://dashboard.shoppex.io/invoices/%s" target="_blank" rel="noopener">%s</a>',
+				rawurlencode( $uniqid ),
 				esc_html__( 'Shoppex dashboard', 'shoppex-pay' )
 			);
 			$order->add_order_note(

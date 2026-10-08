@@ -61,7 +61,7 @@ const expectedFields = [
 	'woocommerce_shoppex_description',
 	'woocommerce_shoppex_api_key',
 	'woocommerce_shoppex_webhook_secret',
-	'woocommerce_shoppex_white_label',
+	'woocommerce_shoppex_checkout_display',
 	'woocommerce_shoppex_order_prefix',
 	'woocommerce_shoppex_debug',
 ];

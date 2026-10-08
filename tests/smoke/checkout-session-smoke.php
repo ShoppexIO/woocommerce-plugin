@@ -84,7 +84,6 @@ $payload         = array(
 		'wc_order_key' => 'wc_order_smoketest',
 		'source'       => 'woocommerce',
 	),
-	'white_label'    => false,
 );
 
 list( $status, $body, $raw ) = req(

@@ -63,25 +63,16 @@ class Shoppex_Api_Client {
 	}
 
 	/**
-	 * Fetch a payment / order by uniqid.
-	 *
-	 * @param string $uniqid Shoppex uniqid.
-	 * @return array
-	 */
-	public function get_payment( $uniqid ) {
-		return $this->request( 'GET', '/dev/v1/payments/' . rawurlencode( $uniqid ) );
-	}
-
-	/**
 	 * Refund an order. Only Stripe / PayPal underlying gateways are supported server-side;
 	 * other PSPs return VALIDATION_ERROR which callers should surface gracefully.
 	 *
-	 * @param string     $order_uniqid Shoppex order uniqid.
-	 * @param float|null $amount       Refund amount. Null = full refund.
-	 * @param string     $reason       Optional reason text.
+	 * @param string     $order_uniqid    Shoppex order uniqid.
+	 * @param float|null $amount          Refund amount. Null = full refund.
+	 * @param string     $reason          Optional reason text.
+	 * @param string     $idempotency_key Key that is stable across retries of this one refund.
 	 * @return array
 	 */
-	public function refund_order( $order_uniqid, $amount, $reason = '' ) {
+	public function refund_order( $order_uniqid, $amount, $reason, $idempotency_key ) {
 		$body = array();
 		if ( null !== $amount ) {
 			$body['amount'] = (string) $amount;
@@ -93,7 +84,7 @@ class Shoppex_Api_Client {
 			'POST',
 			'/dev/v1/orders/' . rawurlencode( $order_uniqid ) . '/refund',
 			$body,
-			array( 'Idempotency-Key' => 'woo_refund_' . $order_uniqid . '_' . ( null === $amount ? 'full' : (string) $amount ) )
+			array( 'Idempotency-Key' => $idempotency_key )
 		);
 	}
 
