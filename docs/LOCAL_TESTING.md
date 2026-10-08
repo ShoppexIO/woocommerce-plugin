@@ -58,10 +58,10 @@ npx localtunnel --port 8080
 
 ## 4. Register the webhook in Shoppex
 
-In the Shoppex dashboard → *Settings → Developer Tools → Webhooks* → add a webhook:
+In the Shoppex dashboard → *Settings → Developer → Webhooks* → add a webhook:
 
 - **URL:** `https://YOUR-TUNNEL/?wc-api=shoppex_webhook`
-- **Events:** `order:created`, `order:paid`, `order:partial`, `order:cancelled`, `order:disputed`, `order:updated`
+- **Events:** `order:paid`, `order:partial`, `order:cancelled`, `order:disputed`, `order:updated`
 - Copy the generated **secret** and paste it into the plugin's Webhook Secret field in WP admin.
 
 ## 5. Run the end-to-end flow
@@ -75,10 +75,10 @@ In the Shoppex dashboard → *Settings → Developer Tools → Webhooks* → add
 
 ## 6. Run the smoke tests
 
-Signature verification (no backend needed):
+Unit tests (no WordPress needed):
 
 ```bash
-php tests/smoke/webhook-signature-smoke.php
+composer test
 ```
 
 Checkout session creation (against localhost:3002 with a working API key):

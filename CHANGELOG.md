@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - Unreleased
+
+### Added
+- *Checkout display* setting: *Redirect* (default) or *Overlay window*. The overlay opens the Shoppex invoice with `Shoppex.open({ invoiceId })` on the order payment page (classic and Blocks checkout) and always links the full payment page.
+- PHPUnit suite with WordPress/WooCommerce doubles (`composer test`), run in CI.
+
+### Security
+- Webhooks are verified with `X-Shoppex-Signature-V2` (HMAC-SHA256 over delivery id, timestamp and body, 5-minute window) instead of the legacy SHA-512 body signature, which a captured delivery could replay forever.
+- The event name comes from the signed body. The unsigned `X-Shoppex-Event` header could turn a captured `order:created` delivery into `order:paid`.
+
+### Fixed
+- `order:paid` completes the order only for a `COMPLETED` invoice that paid at least the order total in the order currency; otherwise the order goes on hold with a note. A repeated delivery completes it once.
+- Orders are found through the checkout session metadata in the shape Shoppex sends (`custom_fields.customFields`); the order key must match.
+- `order:disputed` on a paid order puts it on hold (the paid-order guard dropped it).
+- Events of an older Shoppex invoice of the same order no longer cancel or hold the order; a payment through it still completes the order and retargets refunds.
+- The checkout session idempotency key follows the payload, so a changed cart on a reused pending order no longer gets a 422.
+- Refund idempotency keys are distinct per refund and stable across a retry.
+- Dashboard links point at current routes.
+
+### Removed
+- The *White-label checkout* setting. The checkout session endpoint has no such field; it never had an effect.
+- `Shoppex_Api_Client::get_payment()` (unused) and the standalone signature smoke test (replaced by PHPUnit tests on the plugin classes).
+
 ## [1.0.1] - 2026-04-20
 
 ### Fixed
