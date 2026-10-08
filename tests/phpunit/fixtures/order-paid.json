@@ -1,0 +1,48 @@
+{
+  "event": "order:paid",
+  "data": {
+    "uniqid": "3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70",
+    "type": "PRODUCT",
+    "status": "COMPLETED",
+    "gateway": "STRIPE",
+    "total": 54.31,
+    "total_display": 49.99,
+    "currency": "EUR",
+    "exchange_rate": 0.92,
+    "crypto_exchange_rate": 0,
+    "crypto_gateway": null,
+    "apm_method": "CARD",
+    "customer_email": "buyer@example.com",
+    "country": "DE",
+    "quantity": 1,
+    "custom_fields": {
+      "customFields": [
+        { "name": "wc_order_id", "value": "1234" },
+        { "name": "wc_order_key", "value": "wc_order_key_1234" },
+        { "name": "source", "value": "woocommerce" }
+      ]
+    },
+    "crypto_address": null,
+    "crypto_amount": 0,
+    "crypto_received": 0,
+    "product_id": null,
+    "product_title": "WC Order #1234",
+    "line_items": [
+      {
+        "id": "018f6f2e-7c3a-7b21-9d4e-5a1b2c3d4e5f",
+        "product_id": null,
+        "product_title": "WC Order #1234",
+        "product_type": "DEVELOPER",
+        "variant_id": null,
+        "variant_title": null,
+        "quantity": 1,
+        "delivery_status": "PENDING",
+        "delivered_at": null
+      }
+    ],
+    "is_developer_invoice": true,
+    "created_at": "2026-10-09T10:00:00.000Z",
+    "updated_at": "2026-10-09T10:02:00.000Z"
+  },
+  "created_at": 1791540120
+}
