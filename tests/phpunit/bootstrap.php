@@ -31,6 +31,8 @@ final class Test_State {
 	public static $notices = array();
 	/** @var array<int, int[]> parent order id => refund ids */
 	public static $refunds = array();
+	/** @var string[] What `woocommerce_order_is_paid_statuses` returns. */
+	public static $paid_statuses = array( 'processing', 'completed' );
 
 	public static function reset() {
 		self::$options        = array();
@@ -41,6 +43,7 @@ final class Test_State {
 		self::$inline_scripts = array();
 		self::$notices        = array();
 		self::$refunds        = array();
+		self::$paid_statuses  = array( 'processing', 'completed' );
 	}
 }
 
@@ -72,8 +75,9 @@ function wp_json_encode( $data ) { return json_encode( $data ); }
 function wp_unslash( $value ) { return $value; }
 function sanitize_text_field( $value ) { return trim( (string) $value ); }
 function is_wp_error( $thing ) { return $thing instanceof WP_Error; }
-function wc_get_is_paid_statuses() { return array( 'processing', 'completed' ); }
+function wc_get_is_paid_statuses() { return Test_State::$paid_statuses; }
 function wc_price( $amount, $args = array() ) { return (string) $amount; }
+function wc_format_decimal( $number, $dp = false ) { return number_format( round( (float) $number, (int) $dp ), (int) $dp, '.', '' ); }
 function wc_add_notice( $message, $type = 'success' ) { Test_State::$notices[] = $message; }
 function wc_get_order( $id ) { return Test_State::$orders[ (int) $id ] ?? false; }
 function wc_get_orders( $args ) {

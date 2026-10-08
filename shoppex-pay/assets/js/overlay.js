@@ -24,11 +24,6 @@
 	}
 
 	function open() {
-		if ( ! window.Shoppex || typeof window.Shoppex.open !== 'function' ) {
-			showFallback();
-			return;
-		}
-		window.Shoppex.init( { checkoutBaseUrl: config.checkoutBaseUrl } );
 		window.Shoppex.open( { invoiceId: config.invoiceId } );
 	}
 
@@ -38,6 +33,12 @@
 		}
 	}
 
+	if ( ! window.Shoppex || typeof window.Shoppex.open !== 'function' ) {
+		showFallback();
+		return;
+	}
+
+	window.Shoppex.init( { checkoutBaseUrl: config.checkoutBaseUrl } );
 	document.addEventListener( 'shoppex:success', goToOrderReceived );
 	document.addEventListener( 'shoppex:close', goToOrderReceived );
 	payButton.addEventListener( 'click', open );

@@ -19,7 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Orders are found through the checkout session metadata in the shape Shoppex sends (`custom_fields.customFields`); the order key must match.
 - `order:disputed` on a paid order puts it on hold (the paid-order guard dropped it).
 - Events of an older Shoppex invoice of the same order no longer cancel or hold the order; a payment through it still completes the order and retargets refunds.
-- The checkout session idempotency key follows the payload, so a changed cart on a reused pending order no longer gets a 422.
+- Checkout session idempotency: a retry of a create whose answer was lost replays that session; any later attempt for the order (changed cart on a reused pending order, or a return after the session expired) gets a new session instead of a 422 or an expired invoice.
+- Refund amounts are sent with two decimals (stores with three price decimals got a validation error).
+- A late payment on a refunded order is reported for a manual refund instead of retargeting refunds.
 - Refund idempotency keys are distinct per refund and stable across a retry.
 - Dashboard links point at current routes.
 

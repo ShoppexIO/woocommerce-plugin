@@ -111,6 +111,23 @@ final class WebhookProcessTest extends TestCase {
 		$this->assertSame( 'processing', $this->order->get_status() );
 	}
 
+	public function test_a_late_cancel_does_not_reopen_a_processing_order_when_a_filter_replaced_the_paid_statuses() {
+		Shoppex_Webhook_Handler::process( $this->payload() );
+		Test_State::$paid_statuses = array( 'shipped' );
+		Shoppex_Webhook_Handler::process( $this->payload( 'order:cancelled', array( 'status' => 'VOIDED' ) ) );
+		$this->assertSame( 'processing', $this->order->get_status() );
+	}
+
+	public function test_a_late_payment_on_a_refunded_order_keeps_refunds_on_the_original_invoice() {
+		$this->order->update_status( 'refunded' );
+		$second = '9b1d2c3e-4f50-4a6b-8c7d-0e1f2a3b4c5d';
+
+		$this->assertSame( 'ignored', Shoppex_Webhook_Handler::process( $this->payload( 'order:paid', array( 'uniqid' => $second ) ) ) );
+
+		$this->assertSame( self::UNIQID, $this->order->get_meta( WC_Gateway_Shoppex::META_UNIQID ) );
+		$this->assertStringContainsString( 'Refund the second payment', end( $this->order->notes ) );
+	}
+
 	public function test_a_dispute_on_a_paid_order_puts_it_on_hold() {
 		// Disputes only exist for paid orders; the paid-order guard used to drop them.
 		Shoppex_Webhook_Handler::process( $this->payload() );

@@ -151,7 +151,8 @@ class Shoppex_Webhook_Handler {
 
 		// Once an order is paid, refunded or cancelled here, a late or
 		// out-of-order event must not move it back.
-		$paid_or_terminal = array_unique( array_merge( array( 'refunded', 'cancelled' ), (array) wc_get_is_paid_statuses() ) );
+		// The explicit statuses survive a filter that replaces the paid statuses.
+		$paid_or_terminal = array_unique( array_merge( array( 'processing', 'completed', 'refunded', 'cancelled' ), (array) wc_get_is_paid_statuses() ) );
 		if ( $order->has_status( $paid_or_terminal ) ) {
 			$order->add_order_note(
 				sprintf(
@@ -223,11 +224,12 @@ class Shoppex_Webhook_Handler {
 			return false;
 		}
 
-		if ( $order->is_paid() ) {
+		// payment_complete() leaves a refunded order alone, so it counts as paid.
+		if ( $order->is_paid() || $order->has_status( 'refunded' ) ) {
 			$order->add_order_note(
 				sprintf(
 					/* translators: %s: Shoppex invoice id. */
-					__( 'Shoppex Pay: invoice %s was paid, but this order is already paid. Refund the second payment in Shoppex.', 'shoppex-pay' ),
+					__( 'Shoppex Pay: invoice %s was paid, but this order is already paid or refunded. Refund the second payment in Shoppex.', 'shoppex-pay' ),
 					$uniqid
 				)
 			);

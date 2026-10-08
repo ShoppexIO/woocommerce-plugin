@@ -214,10 +214,15 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		 */
 		$payload = apply_filters( 'shoppex_pay_checkout_session_payload', $payload, $order );
 
-		// WooCommerce reuses a pending order when the customer returns to the
-		// checkout with a changed cart. Shoppex refuses a reused key with a new
-		// body, so the key follows the payload: same payload, same session.
-		$idempotency_key = 'woo_order_' . $order->get_id() . '_' . substr( hash( 'sha256', (string) wp_json_encode( $payload ) ), 0, 16 );
+		// A retry of a create whose answer never arrived replays that session.
+		// Any later attempt for the order gets a new one: Shoppex refuses a
+		// reused key with a changed body (WooCommerce reuses a pending order
+		// when the cart changes) and would replay an expired session for 24h.
+		$idempotency_key = 'woo_order_' . $order->get_id() . '_' . substr(
+			hash( 'sha256', (string) $order->get_meta( self::META_UNIQID ) . '|' . wp_json_encode( $payload ) ),
+			0,
+			24
+		);
 		$response        = $this->api()->create_checkout_session( $payload, $idempotency_key );
 
 		if ( ! $response['ok'] || empty( $response['data']['url'] ) ) {
@@ -343,8 +348,10 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 				)
 			)
 		);
-		$key          = 'woo_refund_' . $uniqid . '_' . $refund_count . '_' . ( null === $amount ? 'full' : (string) $amount );
-		$response     = $this->api()->refund_order( $uniqid, $amount, $reason, $key );
+		// Shoppex takes at most two decimals, whatever the store's price precision.
+		$amount   = null === $amount ? null : wc_format_decimal( $amount, 2 );
+		$key      = 'woo_refund_' . $uniqid . '_' . $refund_count . '_' . ( null === $amount ? 'full' : $amount );
+		$response = $this->api()->refund_order( $uniqid, $amount, $reason, $key );
 
 		if ( $response['ok'] ) {
 			$order->add_order_note(

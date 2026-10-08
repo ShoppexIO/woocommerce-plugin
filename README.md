@@ -66,7 +66,7 @@ WooCommerce calls process_payment()
     ▼
 POST https://api.shoppex.io/dev/v1/checkout/sessions
     │  Authorization: Bearer shx_...
-    │  Idempotency-Key: woo_order_<id>_<payload hash>
+    │  Idempotency-Key: woo_order_<id>_<hash of previous session + payload>
     │
     ▼
 Shoppex returns { data: { id, url, ... } }

@@ -68,22 +68,42 @@ final class GatewayTest extends TestCase {
 		$this->assertSame( $this->order->get_checkout_payment_url( true ), $result['redirect'] );
 	}
 
-	public function test_a_changed_cart_on_the_reused_order_gets_a_new_idempotency_key() {
-		// Shoppex answers a reused key with a different body with 422, which left
-		// the buyer unable to pay for 24 hours.
+	public function test_a_lost_answer_replays_its_session_and_later_attempts_get_a_new_one() {
 		$gateway = $this->gateway();
-		$this->queue_session();
+
+		// The first create timed out before the plugin stored the session.
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
 		$gateway->process_payment( 1234 );
 		$first = $this->last_request()['headers']['Idempotency-Key'];
-
 		$this->queue_session();
 		$gateway->process_payment( 1234 );
 		$this->assertSame( $first, $this->last_request()['headers']['Idempotency-Key'] );
 
+		// The customer comes back later: the stored session may have expired,
+		// and a replay would hand it out again for 24 hours.
+		$this->queue_session();
+		$gateway->process_payment( 1234 );
+		$second = $this->last_request()['headers']['Idempotency-Key'];
+		$this->assertNotSame( $first, $second );
+
+		// A changed cart on the reused pending order: a reused key with a new
+		// body is a 422 at Shoppex.
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, '' );
 		$this->order->total = '79.99';
 		$this->queue_session();
 		$gateway->process_payment( 1234 );
 		$this->assertNotSame( $first, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_refund_amounts_are_sent_with_two_decimals() {
+		// A store with three price decimals passes 30.300; Shoppex refuses it.
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+		Test_State::$refunds[1234] = array( 501 );
+		Test_State::$responses[]   = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+
+		$this->gateway()->process_refund( 1234, '30.300', '' );
+
+		$this->assertSame( array( 'amount' => '30.30' ), json_decode( $this->last_request()['body'], true ) );
 	}
 
 	public function test_two_refunds_of_the_same_amount_use_two_keys_and_a_retry_reuses_its_key() {
