@@ -363,33 +363,35 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		}
 
 		// Shoppex takes at most two decimals, whatever the store's price precision.
-		$amount  = null === $amount ? null : wc_format_decimal( $amount, 2 );
-		$request = ( null === $amount ? 'full' : $amount ) . '|' . $reason;
+		$amount = null === $amount ? null : wc_format_decimal( $amount, 2 );
+		$slot   = null === $amount ? 'full' : $amount;
 		// A refund whose answer was lost may have gone through, and WooCommerce
-		// deleted its record. The merchant's retry of the same request reuses
-		// the lost key within Shoppex's 24-hour replay window, so Shoppex replays
-		// that refund (or answers that it is still processing) instead of paying
-		// twice. Only a success settles it.
+		// deleted its record. A retry of that amount reuses the lost key within
+		// Shoppex's 24-hour replay window, so Shoppex replays that refund (or
+		// answers that it is still processing, or refuses a changed reason)
+		// instead of paying twice. Only a success settles it.
 		$pending = $order->get_meta( self::META_REFUND_PENDING );
-		$retry   = is_array( $pending ) && $request === $pending['request'] && $pending['at'] > time() - DAY_IN_SECONDS;
-		$key     = $retry ? $pending['key'] : 'woo_refund_' . $uniqid . '_' . $refund->get_id();
+		$pending = is_array( $pending ) ? $pending : array();
+		foreach ( $pending as $lost_slot => $lost ) {
+			if ( $lost['at'] <= time() - DAY_IN_SECONDS ) {
+				unset( $pending[ $lost_slot ] );
+			}
+		}
+		$retry = isset( $pending[ $slot ] );
+		$key   = $retry ? $pending[ $slot ]['key'] : 'woo_refund_' . $uniqid . '_' . $refund->get_id();
 
 		$response = $this->api()->refund_order( $uniqid, $amount, $reason, $key );
 
 		if ( $retry && $response['ok'] ) {
-			$order->delete_meta_data( self::META_REFUND_PENDING );
-			$order->save();
+			unset( $pending[ $slot ] );
 		} elseif ( ! $retry && ( 0 === $response['status'] || $response['status'] >= 500 ) ) {
-			$order->update_meta_data(
-				self::META_REFUND_PENDING,
-				array(
-					'key'     => $key,
-					'request' => $request,
-					'at'      => time(),
-				)
+			$pending[ $slot ] = array(
+				'key' => $key,
+				'at'  => time(),
 			);
-			$order->save();
 		}
+		$order->update_meta_data( self::META_REFUND_PENDING, $pending );
+		$order->save();
 
 		if ( $response['ok'] ) {
 			$order->add_order_note(

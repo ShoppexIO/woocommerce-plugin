@@ -192,6 +192,41 @@ final class GatewayTest extends TestCase {
 		$this->assertCount( 1, Test_State::$requests );
 	}
 
+	public function test_a_second_lost_answer_does_not_forget_the_first() {
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$lost = $this->last_request()['headers']['Idempotency-Key'];
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '5.00', '' );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 503, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$this->assertSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_a_retry_of_a_lost_refund_with_another_reason_keeps_the_lost_key() {
+		// Shoppex refuses a reused key with another body; a new key could pay twice.
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '10.00', 'Damaged' );
+		$lost = $this->last_request()['headers']['Idempotency-Key'];
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 422, 'body' => array( 'error' => array( 'code' => 'VALIDATION_ERROR', 'message' => 'This Idempotency-Key was already used with a different request payload.' ) ) );
+		$gateway->process_refund( 1234, '10.00', 'Broken on arrival' );
+		$this->assertSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
 	public function test_a_retry_after_a_lost_answer_with_another_amount_is_a_new_refund() {
 		$gateway = $this->gateway();
 		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
