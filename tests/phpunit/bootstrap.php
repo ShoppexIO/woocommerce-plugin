@@ -13,6 +13,7 @@ define( 'SHOPPEX_PAY_VERSION', 'test' );
 define( 'SHOPPEX_PAY_PLUGIN_URL', 'https://store.test/wp-content/plugins/shoppex-pay/' );
 define( 'SHOPPEX_PAY_API_BASE', 'https://api.shoppex.io' );
 define( 'SHOPPEX_PAY_CHECKOUT_BASE', 'https://checkout.shoppex.io' );
+define( 'DAY_IN_SECONDS', 86400 );
 
 final class Test_State {
 	/** @var array<string, mixed> */
@@ -29,8 +30,6 @@ final class Test_State {
 	public static $inline_scripts = array();
 	/** @var array<int, string> */
 	public static $notices = array();
-	/** @var array<int, int[]> parent order id => refund ids */
-	public static $refunds = array();
 	/** @var string[] What `woocommerce_order_is_paid_statuses` returns. */
 	public static $paid_statuses = array( 'processing', 'completed' );
 
@@ -42,7 +41,6 @@ final class Test_State {
 		self::$scripts        = array();
 		self::$inline_scripts = array();
 		self::$notices        = array();
-		self::$refunds        = array();
 		self::$paid_statuses  = array( 'processing', 'completed' );
 	}
 }
@@ -80,12 +78,6 @@ function wc_price( $amount, $args = array() ) { return (string) $amount; }
 function wc_format_decimal( $number, $dp = false ) { return number_format( round( (float) $number, (int) $dp ), (int) $dp, '.', '' ); }
 function wc_add_notice( $message, $type = 'success' ) { Test_State::$notices[] = $message; }
 function wc_get_order( $id ) { return Test_State::$orders[ (int) $id ] ?? false; }
-function wc_get_orders( $args ) {
-	if ( 'shop_order_refund' === ( $args['type'] ?? '' ) ) {
-		return Test_State::$refunds[ (int) $args['parent'] ] ?? array();
-	}
-	throw new LogicException( 'Unexpected wc_get_orders query: ' . json_encode( $args ) );
-}
 function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $in_footer = false ) {
 	Test_State::$scripts[] = compact( 'handle', 'src', 'deps', 'ver' );
 }
@@ -158,6 +150,7 @@ class WC_Order {
 	}
 	public function get_meta( $key ) { return $this->meta[ $key ] ?? ''; }
 	public function update_meta_data( $key, $value ) { $this->meta[ $key ] = $value; }
+	public function delete_meta_data( $key ) { unset( $this->meta[ $key ] ); }
 	public function save() { ++$this->saves; }
 	public function get_status() { return $this->status; }
 	public function has_status( $status ) { return in_array( $this->status, (array) $status, true ); }
@@ -176,6 +169,17 @@ class WC_Order {
 		$this->transaction_id = $transaction_id;
 		$this->status         = 'processing';
 	}
+}
+
+class WC_Order_Refund {
+	public $id;
+	public $parent_id;
+	public function __construct( $id, $parent_id ) {
+		$this->id        = $id;
+		$this->parent_id = $parent_id;
+	}
+	public function get_id() { return $this->id; }
+	public function get_parent_id() { return $this->parent_id; }
 }
 
 require dirname( __DIR__, 2 ) . '/shoppex-pay/includes/class-shoppex-api-client.php';

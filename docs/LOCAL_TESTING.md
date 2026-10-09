@@ -81,6 +81,12 @@ Unit tests (no WordPress needed):
 composer test
 ```
 
+Webhook signature and processing only (needs `composer install`):
+
+```bash
+npm run test:smoke
+```
+
 Checkout session creation (against localhost:3002 with a working API key):
 
 ```bash

@@ -135,6 +135,35 @@ final class WebhookProcessTest extends TestCase {
 		$this->assertSame( 'on-hold', $this->order->get_status() );
 	}
 
+	public function test_a_retried_dispute_does_not_hold_an_order_the_merchant_released() {
+		// Shoppex retries and manual resends carry a new delivery id and a fresh
+		// signature timestamp; only the frozen payload stays the same.
+		Shoppex_Webhook_Handler::process( $this->payload() );
+		$dispute = $this->payload( 'order:disputed', array( 'status' => 'DISPUTED' ) );
+		Shoppex_Webhook_Handler::process( $dispute );
+		$this->order->update_status( 'completed' );
+
+		$this->assertSame( 'ignored', Shoppex_Webhook_Handler::process( $dispute ) );
+		$this->assertSame( 'completed', $this->order->get_status() );
+	}
+
+	public function test_a_later_dispute_holds_a_released_order_again() {
+		Shoppex_Webhook_Handler::process( $this->payload() );
+		$dispute = $this->payload( 'order:disputed', array( 'status' => 'DISPUTED' ) );
+		Shoppex_Webhook_Handler::process( $dispute );
+		$this->order->update_status( 'completed' );
+
+		$dispute['created_at'] += 86400;
+		$this->assertSame( 'applied', Shoppex_Webhook_Handler::process( $dispute ) );
+		$this->assertSame( 'on-hold', $this->order->get_status() );
+	}
+
+	public function test_a_dispute_leaves_an_unpaid_order_alone() {
+		// A dispute applies to a payment; a pending order has none to hold.
+		$this->assertSame( 'ignored', Shoppex_Webhook_Handler::process( $this->payload( 'order:disputed', array( 'status' => 'DISPUTED' ) ) ) );
+		$this->assertSame( 'pending', $this->order->get_status() );
+	}
+
 	public function test_a_foreign_order_key_is_not_matched() {
 		$payload                                        = $this->payload();
 		$payload['data']['custom_fields']['customFields'][1]['value'] = 'wc_order_key_from_staging';

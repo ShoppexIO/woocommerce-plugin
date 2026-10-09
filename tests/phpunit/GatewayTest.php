@@ -19,6 +19,7 @@ final class GatewayTest extends TestCase {
 
 	protected function setUp(): void {
 		Test_State::reset();
+		WC_Gateway_Shoppex::remember_refund( null );
 		$this->order              = new WC_Order( 1234, '49.99', 'EUR' );
 		Test_State::$orders[1234] = $this->order;
 	}
@@ -98,8 +99,8 @@ final class GatewayTest extends TestCase {
 	public function test_refund_amounts_are_sent_with_two_decimals() {
 		// A store with three price decimals passes 30.300; Shoppex refuses it.
 		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
-		Test_State::$refunds[1234] = array( 501 );
-		Test_State::$responses[]   = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
 
 		$this->gateway()->process_refund( 1234, '30.300', '' );
 
@@ -111,24 +112,109 @@ final class GatewayTest extends TestCase {
 		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
 		$refunded = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'Order refunded successfully.' ) ) );
 
-		Test_State::$refunds[1234] = array( 501 );
-		Test_State::$responses[]   = $refunded;
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = $refunded;
 		$this->assertTrue( $gateway->process_refund( 1234, '10.00', '' ) );
 		$first = $this->last_request()['headers']['Idempotency-Key'];
 		$this->assertSame( 'https://api.shoppex.io/dev/v1/orders/' . self::UNIQID . '/refund', $this->last_request()['url'] );
 
 		// A second, separate refund of the same amount.
-		Test_State::$refunds[1234] = array( 502, 501 );
-		Test_State::$responses[]   = new WP_Error( 'http_request_failed', 'timeout' );
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
 		$this->assertInstanceOf( WP_Error::class, $gateway->process_refund( 1234, '10.00', '' ) );
 		$second = $this->last_request()['headers']['Idempotency-Key'];
 		$this->assertNotSame( $first, $second );
 
 		// WooCommerce deleted the failed refund; the merchant retries it.
-		Test_State::$refunds[1234] = array( 503, 501 );
-		Test_State::$responses[]   = $refunded;
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 503, 1234 ) );
+		Test_State::$responses[] = $refunded;
 		$this->assertTrue( $gateway->process_refund( 1234, '10.00', '' ) );
 		$this->assertSame( $second, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_a_refund_recorded_again_after_its_record_was_deleted_is_sent_as_a_new_refund() {
+		// Refund 10.00, delete that refund record in WooCommerce, refund 10.00
+		// again: a reused key made Shoppex replay the first success, and
+		// WooCommerce recorded a refund that never happened.
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+		$refunded = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'Order refunded successfully.' ) ) );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = $refunded;
+		$gateway->process_refund( 1234, '10.00', 'Damaged' );
+		$first = $this->last_request()['headers']['Idempotency-Key'];
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = $refunded;
+		$gateway->process_refund( 1234, '10.00', 'Damaged' );
+
+		$this->assertNotSame( $first, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_a_retry_answered_still_processing_keeps_the_lost_key() {
+		// Shoppex answers a reused key whose first request is still running (or
+		// whose outcome it lost) with a validation error, not a success.
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$lost = $this->last_request()['headers']['Idempotency-Key'];
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 400, 'body' => array( 'error' => array( 'code' => 'VALIDATION_ERROR', 'message' => 'A request with this Idempotency-Key is still processing. Retry shortly.' ) ) );
+		$this->assertInstanceOf( WP_Error::class, $gateway->process_refund( 1234, '10.00', '' ) );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 503, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		$this->assertTrue( $gateway->process_refund( 1234, '10.00', '' ) );
+		$this->assertSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+
+		// Settled: the next refund of the same amount is a new one.
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 504, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$this->assertNotSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_a_refund_is_not_sent_twice_under_the_previous_refund_identity() {
+		// A second gateway call in the same request without a new WooCommerce
+		// refund would reuse the first refund's key and replay its success.
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		$gateway->process_refund( 1234, '10.00', '' );
+
+		$this->assertInstanceOf( WP_Error::class, $gateway->process_refund( 1234, '10.00', '' ) );
+		$this->assertCount( 1, Test_State::$requests );
+	}
+
+	public function test_a_retry_after_a_lost_answer_with_another_amount_is_a_new_refund() {
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$lost = $this->last_request()['headers']['Idempotency-Key'];
+
+		// A reused key with another body is a 422 at Shoppex.
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = array( 'status' => 200, 'body' => array( 'data' => array( 'message' => 'ok' ) ) );
+		$this->assertTrue( $gateway->process_refund( 1234, '12.00', '' ) );
+		$this->assertNotSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
+	public function test_a_refund_of_another_order_is_refused_without_calling_shoppex() {
+		// Only the refund WooCommerce just saved for this order names the operation.
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 999 ) );
+
+		$this->assertInstanceOf( WP_Error::class, $this->gateway()->process_refund( 1234, '10.00', '' ) );
+		$this->assertSame( array(), Test_State::$requests );
 	}
 
 	public function test_the_order_payment_page_opens_the_invoice_and_keeps_the_full_page_link() {

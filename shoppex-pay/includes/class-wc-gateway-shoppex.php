@@ -16,6 +16,15 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 	const META_SESSION_URL    = '_shoppex_session_url';
 	const META_LAST_STATUS    = '_shoppex_last_status';
 	const META_PAYMENT_METHOD = '_shoppex_payment_method';
+	const META_REFUND_PENDING = '_shoppex_refund_pending';
+	const META_EVENTS         = '_shoppex_processed_events';
+
+	/**
+	 * The refund WooCommerce is creating in this request.
+	 *
+	 * @var WC_Order_Refund|null
+	 */
+	private static $current_refund = null;
 
 	/**
 	 * API key.
@@ -311,6 +320,16 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 	}
 
 	/**
+	 * `woocommerce_create_refund` hook: remember the refund WooCommerce is about
+	 * to save and send to process_refund().
+	 *
+	 * @param WC_Order_Refund|null $refund Refund being created.
+	 */
+	public static function remember_refund( $refund ) {
+		self::$current_refund = $refund;
+	}
+
+	/**
 	 * Process a refund via Shoppex. Only Stripe / PayPal underlying gateways
 	 * are supported by the Shoppex API; other PSPs return a validation error
 	 * that is surfaced as an order note with a manual-refund hint.
@@ -334,24 +353,43 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 			);
 		}
 
-		// WooCommerce saved this refund before calling the gateway and deletes it
-		// again when the call fails. The refund count therefore keeps the key
-		// stable across a retry (a timed-out call that did refund replays its
-		// result) and distinct for a second refund of the same amount.
-		$refund_count = count(
-			wc_get_orders(
-				array(
-					'type'   => 'shop_order_refund',
-					'parent' => $order->get_id(),
-					'limit'  => -1,
-					'return' => 'ids',
-				)
-			)
-		);
+		// WooCommerce saved this refund right before it called the gateway. Its id
+		// never repeats, so a refund recorded again after the merchant deleted
+		// the first record is sent as a new refund, not replayed.
+		$refund               = self::$current_refund;
+		self::$current_refund = null;
+		if ( ! $refund || (int) $refund->get_parent_id() !== (int) $order->get_id() || ! $refund->get_id() ) {
+			return new WP_Error( 'shoppex_refund_no_refund', __( 'Create the refund in WooCommerce to send it through Shoppex Pay.', 'shoppex-pay' ) );
+		}
+
 		// Shoppex takes at most two decimals, whatever the store's price precision.
-		$amount   = null === $amount ? null : wc_format_decimal( $amount, 2 );
-		$key      = 'woo_refund_' . $uniqid . '_' . $refund_count . '_' . ( null === $amount ? 'full' : $amount );
+		$amount  = null === $amount ? null : wc_format_decimal( $amount, 2 );
+		$request = ( null === $amount ? 'full' : $amount ) . '|' . $reason;
+		// A refund whose answer was lost may have gone through, and WooCommerce
+		// deleted its record. The merchant's retry of the same request reuses
+		// the lost key within Shoppex's 24-hour replay window, so Shoppex replays
+		// that refund (or answers that it is still processing) instead of paying
+		// twice. Only a success settles it.
+		$pending = $order->get_meta( self::META_REFUND_PENDING );
+		$retry   = is_array( $pending ) && $request === $pending['request'] && $pending['at'] > time() - DAY_IN_SECONDS;
+		$key     = $retry ? $pending['key'] : 'woo_refund_' . $uniqid . '_' . $refund->get_id();
+
 		$response = $this->api()->refund_order( $uniqid, $amount, $reason, $key );
+
+		if ( $retry && $response['ok'] ) {
+			$order->delete_meta_data( self::META_REFUND_PENDING );
+			$order->save();
+		} elseif ( ! $retry && ( 0 === $response['status'] || $response['status'] >= 500 ) ) {
+			$order->update_meta_data(
+				self::META_REFUND_PENDING,
+				array(
+					'key'     => $key,
+					'request' => $request,
+					'at'      => time(),
+				)
+			);
+			$order->save();
+		}
 
 		if ( $response['ok'] ) {
 			$order->add_order_note(

@@ -98,7 +98,29 @@ class Shoppex_Webhook_Handler {
 			return 'unmatched';
 		}
 
-		$applied = self::apply_event( $order, $event, $data );
+		// Retries and manual resends repeat the frozen payload under a new
+		// delivery id. Applied again, it would undo what the merchant did since,
+		// e.g. hold an order they released after reviewing a dispute.
+		$event_id  = hash(
+			'sha256',
+			wp_json_encode(
+				array(
+					$event,
+					isset( $data['uniqid'] ) ? (string) $data['uniqid'] : '',
+					isset( $data['status'] ) ? (string) $data['status'] : '',
+					isset( $payload['created_at'] ) ? (string) $payload['created_at'] : '',
+				)
+			)
+		);
+		$processed = $order->get_meta( WC_Gateway_Shoppex::META_EVENTS );
+		$processed = is_array( $processed ) ? $processed : array();
+		if ( in_array( $event_id, $processed, true ) ) {
+			return 'ignored';
+		}
+
+		$applied     = self::apply_event( $order, $event, $data );
+		$processed[] = $event_id;
+		$order->update_meta_data( WC_Gateway_Shoppex::META_EVENTS, array_slice( $processed, -50 ) );
 		$order->save();
 		return $applied ? 'applied' : 'ignored';
 	}
@@ -138,11 +160,21 @@ class Shoppex_Webhook_Handler {
 
 		$order->update_meta_data( WC_Gateway_Shoppex::META_LAST_STATUS, $status );
 
+		// The explicit statuses survive a filter that replaces the paid statuses.
+		$paid = array_unique( array_merge( array( 'processing', 'completed' ), (array) wc_get_is_paid_statuses() ) );
+
 		// Only a paid order can be disputed, so a dispute must get past the
 		// paid-order guard below. DISPUTED never means paid: hold the order.
+		// Any other status (refunded, cancelled, already on hold) stays as it is.
 		if ( 'order:disputed' === $event ) {
-			if ( $order->has_status( array( 'refunded', 'cancelled' ) ) ) {
-				$order->add_order_note( __( 'Shoppex Pay: dispute reported for an order that is already refunded or cancelled.', 'shoppex-pay' ) );
+			if ( ! $order->has_status( $paid ) ) {
+				$order->add_order_note(
+					sprintf(
+						/* translators: %s: order status. */
+						__( 'Shoppex Pay: dispute reported for an order in status %s; the status was not changed.', 'shoppex-pay' ),
+						$order->get_status()
+					)
+				);
 				return false;
 			}
 			$order->update_status( 'on-hold', __( 'Shoppex Pay: payment disputed — manual review required.', 'shoppex-pay' ) );
@@ -151,9 +183,7 @@ class Shoppex_Webhook_Handler {
 
 		// Once an order is paid, refunded or cancelled here, a late or
 		// out-of-order event must not move it back.
-		// The explicit statuses survive a filter that replaces the paid statuses.
-		$paid_or_terminal = array_unique( array_merge( array( 'processing', 'completed', 'refunded', 'cancelled' ), (array) wc_get_is_paid_statuses() ) );
-		if ( $order->has_status( $paid_or_terminal ) ) {
+		if ( $order->has_status( array_merge( $paid, array( 'refunded', 'cancelled' ) ) ) ) {
 			$order->add_order_note(
 				sprintf(
 					/* translators: 1: event name, 2: status code. */

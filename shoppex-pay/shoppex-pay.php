@@ -71,6 +71,7 @@ add_action(
 		);
 
 		Shoppex_Webhook_Handler::register();
+		add_action( 'woocommerce_create_refund', array( 'WC_Gateway_Shoppex', 'remember_refund' ) );
 	},
 	11
 );

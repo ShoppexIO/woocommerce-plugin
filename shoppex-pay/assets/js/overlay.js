@@ -3,8 +3,9 @@
  *
  * Opens the order's Shoppex invoice in the embed window. The browser events
  * only navigate the customer; the order is marked paid by the signed webhook.
- * When the embed script did not load, the page says so and the full payment
- * page link stays the way forward.
+ * When the embed script did not load, or is an older one without invoice
+ * mode (it would open nothing), the page says so and the full payment page
+ * link stays the way forward.
  */
 ( function () {
 	'use strict';
@@ -33,7 +34,8 @@
 		}
 	}
 
-	if ( ! window.Shoppex || typeof window.Shoppex.open !== 'function' ) {
+	var shoppex = window.Shoppex;
+	if ( ! shoppex || typeof shoppex.open !== 'function' || ! shoppex.supports || shoppex.supports.invoiceId !== true ) {
 		showFallback();
 		return;
 	}

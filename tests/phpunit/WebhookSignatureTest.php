@@ -55,6 +55,15 @@ final class WebhookSignatureTest extends TestCase {
 		$this->assertFalse( Shoppex_Webhook_Handler::verify_signature( $body, $header, self::DELIVERY, (string) self::NOW, self::SECRET . 'x', self::NOW ) );
 	}
 
+	public function test_rejects_a_short_or_one_character_off_signature() {
+		// Carried over from the standalone signature smoke test.
+		$body   = $this->body();
+		$header = $this->header( $body, self::NOW );
+		$almost = substr( $header, 0, -1 ) . ( 'a' === substr( $header, -1 ) ? 'b' : 'a' );
+		$this->assertFalse( Shoppex_Webhook_Handler::verify_signature( $body, 'v1,t=' . self::NOW . ',h=abc', self::DELIVERY, (string) self::NOW, self::SECRET, self::NOW ) );
+		$this->assertFalse( Shoppex_Webhook_Handler::verify_signature( $body, $almost, self::DELIVERY, (string) self::NOW, self::SECRET, self::NOW ) );
+	}
+
 	public function test_rejects_the_legacy_sha512_signature_and_missing_parts() {
 		$body = $this->body();
 		$this->assertFalse( Shoppex_Webhook_Handler::verify_signature( $body, hash_hmac( 'sha512', $body, self::SECRET ), self::DELIVERY, (string) self::NOW, self::SECRET, self::NOW ) );

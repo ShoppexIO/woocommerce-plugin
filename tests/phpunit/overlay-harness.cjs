@@ -1,0 +1,38 @@
+// Runs assets/js/overlay.js against a minimal page and prints what the buyer sees.
+// Usage: node overlay-harness.cjs <overlay.js> <missing|without-invoice-mode|with-invoice-mode>
+const fs = require('fs');
+const vm = require('vm');
+
+const [script, embed] = process.argv.slice(2);
+
+function element(hidden) {
+	return { hidden, addEventListener() {} };
+}
+const error = element(true);
+const payButton = element(false);
+const root = {
+	querySelector: (selector) => (selector === '[data-shoppex-pay-open]' ? payButton : error),
+};
+const document = {
+	getElementById: (id) => (id === 'shoppex-pay-overlay' ? root : null),
+	addEventListener() {},
+};
+const opened = [];
+const window = {
+	shoppexPayOverlay: {
+		invoiceId: '3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70',
+		checkoutBaseUrl: 'https://checkout.shoppex.io',
+		returnUrl: 'https://store.test/checkout/order-received/1234/',
+	},
+	location: { assign() {} },
+};
+if (embed !== 'missing') {
+	// The embed SDK before invoice mode: open() exists but needs items or groupId.
+	window.Shoppex = { init() {}, open: (options) => opened.push(options) };
+	if (embed === 'with-invoice-mode') {
+		window.Shoppex.supports = { invoiceId: true };
+	}
+}
+
+vm.runInNewContext(fs.readFileSync(script, 'utf8'), { window, document });
+process.stdout.write(JSON.stringify({ error_shown: !error.hidden, pay_button_shown: !payButton.hidden, opened }));
