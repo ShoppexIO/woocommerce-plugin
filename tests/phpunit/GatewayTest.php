@@ -243,6 +243,44 @@ final class GatewayTest extends TestCase {
 		$this->assertNotSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
 	}
 
+	public function test_a_replayed_lost_refund_is_not_recorded_as_a_new_one() {
+		// A 10.00 refund timed out but went through at Shoppex. The merchant
+		// recorded it by hand. A later, real 10.00 refund reused the lost key:
+		// Shoppex replayed the first success and WooCommerce showed 20.00
+		// refunded while the buyer got 10.00.
+		$gateway = $this->gateway();
+		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 501, 1234 ) );
+		Test_State::$responses[] = new WP_Error( 'http_request_failed', 'timeout' );
+		$gateway->process_refund( 1234, '10.00', '' );
+		$lost = $this->last_request()['headers']['Idempotency-Key'];
+
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 502, 1234 ) );
+		Test_State::$responses[] = array(
+			'status'  => 200,
+			'headers' => array( 'idempotency-status' => 'cached' ),
+			'body'    => array( 'data' => array( 'message' => 'Order refunded successfully.' ) ),
+		);
+		$replayed = $gateway->process_refund( 1234, '10.00', '' );
+		$this->assertSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+		// WooCommerce deletes the refund record when the gateway returns an error.
+		$this->assertInstanceOf( WP_Error::class, $replayed );
+		$this->assertSame( 'shoppex_refund_replayed', $replayed->code );
+		$this->assertStringContainsString( 'already refunded 10.00 EUR', $replayed->get_error_message() );
+		$this->assertStringContainsString( 'no new refund was sent', $replayed->get_error_message() );
+
+		// The merchant tries again: a new refund under a new key.
+		WC_Gateway_Shoppex::remember_refund( new WC_Order_Refund( 503, 1234 ) );
+		Test_State::$responses[] = array(
+			'status'  => 200,
+			'headers' => array( 'idempotency-status' => 'created' ),
+			'body'    => array( 'data' => array( 'message' => 'Order refunded successfully.' ) ),
+		);
+		$this->assertTrue( $gateway->process_refund( 1234, '10.00', '' ) );
+		$this->assertNotSame( $lost, $this->last_request()['headers']['Idempotency-Key'] );
+	}
+
 	public function test_a_refund_of_another_order_is_refused_without_calling_shoppex() {
 		// Only the refund WooCommerce just saved for this order names the operation.
 		$this->order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, self::UNIQID );
@@ -263,8 +301,12 @@ final class GatewayTest extends TestCase {
 		$this->assertSame( 'https://checkout.shoppex.io/embed/embed.iife.js', Test_State::$scripts[0]['src'] );
 		$config = Test_State::$inline_scripts[0]['data'];
 		$this->assertStringContainsString( '"invoiceId":"' . self::UNIQID . '"', $config );
+		$this->assertSame( self::SESSION_URL, json_decode( substr( $config, strlen( 'window.shoppexPayOverlay = ' ), -1 ), true )['paymentUrl'] );
 		$this->assertStringContainsString( 'href="' . self::SESSION_URL . '"', $html );
-		$this->assertStringContainsString( 'data-shoppex-pay-error hidden', $html );
+		// Without invoice mode the buyer is sent on, with no error shown.
+		$this->assertStringContainsString( 'data-shoppex-pay-redirecting hidden role="status">Redirecting you to the secure payment page…', $html );
+		$this->assertStringNotContainsString( 'role="alert"', $html );
+		$this->assertStringNotContainsString( 'could not', $html );
 	}
 
 	public function test_the_order_payment_page_opens_nothing_for_a_paid_order() {

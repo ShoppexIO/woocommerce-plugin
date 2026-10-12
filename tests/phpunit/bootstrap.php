@@ -90,6 +90,15 @@ function wp_remote_request( $url, $args ) {
 }
 function wp_remote_retrieve_response_code( $response ) { return $response['status']; }
 function wp_remote_retrieve_body( $response ) { return json_encode( $response['body'] ); }
+function wp_remote_retrieve_header( $response, $header ) {
+	// WordPress matches header names case-insensitively.
+	foreach ( $response['headers'] ?? array() as $name => $value ) {
+		if ( 0 === strcasecmp( $name, $header ) ) {
+			return $value;
+		}
+	}
+	return '';
+}
 
 class WC_Payment_Gateway {
 	public $id;

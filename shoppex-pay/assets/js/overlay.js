@@ -4,8 +4,7 @@
  * Opens the order's Shoppex invoice in the embed window. The browser events
  * only navigate the customer; the order is marked paid by the signed webhook.
  * When the embed script did not load, or is an older one without invoice
- * mode (it would open nothing), the page says so and the full payment page
- * link stays the way forward.
+ * mode (it would open nothing), the buyer goes on to the full payment page.
  */
 ( function () {
 	'use strict';
@@ -17,11 +16,12 @@
 	}
 
 	var payButton = root.querySelector( '[data-shoppex-pay-open]' );
-	var error = root.querySelector( '[data-shoppex-pay-error]' );
+	var redirecting = root.querySelector( '[data-shoppex-pay-redirecting]' );
 
-	function showFallback() {
-		error.hidden = false;
+	function goToPaymentPage() {
+		redirecting.hidden = false;
 		payButton.hidden = true;
+		window.location.assign( config.paymentUrl );
 	}
 
 	function open() {
@@ -36,7 +36,7 @@
 
 	var shoppex = window.Shoppex;
 	if ( ! shoppex || typeof shoppex.open !== 'function' || ! shoppex.supports || shoppex.supports.invoiceId !== true ) {
-		showFallback();
+		goToPaymentPage();
 		return;
 	}
 

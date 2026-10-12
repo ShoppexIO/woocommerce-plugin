@@ -51,7 +51,7 @@ class Shoppex_Api_Client {
 	 *
 	 * @param array  $payload         Session body (product, amount, currency, ...).
 	 * @param string $idempotency_key Stable key derived from the WC order.
-	 * @return array { ok: bool, status: int, data: array, error: ?string }
+	 * @return array { ok: bool, status: int, data: array, error: ?string, idempotency_status: string }
 	 */
 	public function create_checkout_session( array $payload, $idempotency_key ) {
 		return $this->request(
@@ -138,16 +138,20 @@ class Shoppex_Api_Client {
 				$this->log( 'Request transport error: ' . $response->get_error_message() );
 			}
 			return array(
-				'ok'     => false,
-				'status' => 0,
-				'data'   => array(),
-				'error'  => $response->get_error_message(),
+				'ok'                 => false,
+				'status'             => 0,
+				'data'               => array(),
+				'error'              => $response->get_error_message(),
+				'idempotency_status' => '',
 			);
 		}
 
 		$status = (int) wp_remote_retrieve_response_code( $response );
 		$raw    = wp_remote_retrieve_body( $response );
 		$parsed = json_decode( $raw, true );
+		// `cached`: Shoppex answered a reused Idempotency-Key with the stored
+		// response of the first request; nothing ran this time.
+		$idempotency_status = (string) wp_remote_retrieve_header( $response, 'idempotency-status' );
 
 		if ( $this->debug ) {
 			$this->log( sprintf( 'Response %d %s', $status, is_string( $raw ) ? $raw : '(binary)' ) );
@@ -155,10 +159,11 @@ class Shoppex_Api_Client {
 
 		if ( ! is_array( $parsed ) ) {
 			return array(
-				'ok'     => false,
-				'status' => $status,
-				'data'   => array(),
-				'error'  => 'Invalid JSON response',
+				'ok'                 => false,
+				'status'             => $status,
+				'data'               => array(),
+				'error'              => 'Invalid JSON response',
+				'idempotency_status' => $idempotency_status,
 			);
 		}
 
@@ -181,11 +186,12 @@ class Shoppex_Api_Client {
 		}
 
 		return array(
-			'ok'     => $ok,
-			'status' => $status,
-			'data'   => $envelope,
-			'raw'    => $parsed,
-			'error'  => $error,
+			'ok'                 => $ok,
+			'status'             => $status,
+			'data'               => $envelope,
+			'raw'                => $parsed,
+			'error'              => $error,
+			'idempotency_status' => $idempotency_status,
 		);
 	}
 

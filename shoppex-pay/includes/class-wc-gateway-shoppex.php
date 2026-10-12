@@ -18,6 +18,7 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 	const META_PAYMENT_METHOD = '_shoppex_payment_method';
 	const META_REFUND_PENDING = '_shoppex_refund_pending';
 	const META_EVENTS         = '_shoppex_processed_events';
+	const META_HELD_UNIQID    = '_shoppex_held_uniqid';
 
 	/**
 	 * The refund WooCommerce is creating in this request.
@@ -270,9 +271,9 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 
 	/**
 	 * Order payment page in overlay mode: open the Shoppex invoice in the embed
-	 * window. The page keeps a link to the full payment page, and shows it as
-	 * the way forward when the embed script cannot load. Payment status still
-	 * comes only from the signed webhook.
+	 * window. The page keeps a link to the full payment page, and sends the
+	 * buyer there when the embed script cannot open an invoice. Payment status
+	 * still comes only from the signed webhook.
 	 *
 	 * @param int $order_id WC order ID.
 	 */
@@ -305,6 +306,7 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 				array(
 					'invoiceId'       => $uniqid,
 					'checkoutBaseUrl' => $checkout_base,
+					'paymentUrl'      => $session_url,
 					'returnUrl'       => $this->get_return_url( $order ),
 				)
 			) . ';',
@@ -312,7 +314,7 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		);
 		?>
 		<div id="shoppex-pay-overlay">
-			<p data-shoppex-pay-error hidden role="alert"><?php esc_html_e( 'The payment window could not open. Continue on the Shoppex payment page.', 'shoppex-pay' ); ?></p>
+			<p data-shoppex-pay-redirecting hidden role="status"><?php esc_html_e( 'Redirecting you to the secure payment page…', 'shoppex-pay' ); ?></p>
 			<button type="button" class="button alt" data-shoppex-pay-open><?php esc_html_e( 'Pay now', 'shoppex-pay' ); ?></button>
 			<a class="button" href="<?php echo esc_url( $session_url ); ?>"><?php esc_html_e( 'Open the payment page instead', 'shoppex-pay' ); ?></a>
 		</div>
@@ -345,7 +347,10 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 			return new WP_Error( 'shoppex_refund_no_order', __( 'Order not found.', 'shoppex-pay' ) );
 		}
 
-		$uniqid = (string) $order->get_meta( self::META_UNIQID );
+		// An order held for a short or foreign-currency payment was paid through
+		// that invoice, which need not be the order's newest checkout session.
+		$uniqid = (string) $order->get_meta( self::META_HELD_UNIQID );
+		$uniqid = '' === $uniqid ? (string) $order->get_meta( self::META_UNIQID ) : $uniqid;
 		if ( '' === $uniqid ) {
 			return new WP_Error(
 				'shoppex_refund_no_uniqid',
@@ -369,7 +374,7 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		// deleted its record. A retry of that amount reuses the lost key within
 		// Shoppex's 24-hour replay window, so Shoppex replays that refund (or
 		// answers that it is still processing, or refuses a changed reason)
-		// instead of paying twice. Only a success settles it.
+		// instead of paying twice. Only a success, replayed or new, settles it.
 		$pending = $order->get_meta( self::META_REFUND_PENDING );
 		$pending = is_array( $pending ) ? $pending : array();
 		foreach ( $pending as $lost_slot => $lost ) {
@@ -392,6 +397,21 @@ class WC_Gateway_Shoppex extends WC_Payment_Gateway {
 		}
 		$order->update_meta_data( self::META_REFUND_PENDING, $pending );
 		$order->save();
+
+		// The replayed refund may already be on this order: the merchant can
+		// record a lost refund by hand. Recording it again would show more
+		// refunded than the buyer got. The slot is settled, so the next attempt
+		// sends a new refund.
+		if ( $response['ok'] && 'cached' === $response['idempotency_status'] ) {
+			$replayed = sprintf(
+				/* translators: %s: amount. */
+				__( 'Shoppex Pay: Shoppex had already refunded %s for an earlier attempt whose answer was lost, so no new refund was sent. If that refund is not recorded on this order yet, record it with "Refund manually". Otherwise create the refund again to send a new one.', 'shoppex-pay' ),
+				// Plain text: WooCommerce shows the error in a browser alert.
+				null === $amount ? __( 'the full amount', 'shoppex-pay' ) : $amount . ' ' . $order->get_currency()
+			);
+			$order->add_order_note( $replayed );
+			return new WP_Error( 'shoppex_refund_replayed', $replayed );
+		}
 
 		if ( $response['ok'] ) {
 			$order->add_order_note(

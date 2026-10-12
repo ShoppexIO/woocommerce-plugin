@@ -47,10 +47,11 @@ class Shoppex_Webhook_Handler {
 			return;
 		}
 
-		$verified = self::verify_signature(
+		$delivery_id = self::header( 'X-Shoppex-Delivery' );
+		$verified    = self::verify_signature(
 			$raw_body,
 			self::header( 'X-Shoppex-Signature-V2' ),
-			self::header( 'X-Shoppex-Delivery' ),
+			$delivery_id,
 			self::header( 'X-Shoppex-Timestamp' ),
 			$secret,
 			time()
@@ -67,7 +68,7 @@ class Shoppex_Webhook_Handler {
 			return;
 		}
 
-		$result = self::process( $payload );
+		$result = self::process( $payload, $delivery_id );
 		self::log( $gateway, sprintf( 'Webhook %s: %s.', isset( $payload['event'] ) ? (string) $payload['event'] : '', $result ) );
 		// Unknown orders are acknowledged too: a retry would not find them either.
 		self::respond(
@@ -86,10 +87,11 @@ class Shoppex_Webhook_Handler {
 	 * not covered by the signature, so trusting it would let anyone turn a
 	 * captured `order:created` delivery into `order:paid`.
 	 *
-	 * @param array $payload Decoded, signature-verified webhook body.
+	 * @param array  $payload     Decoded, signature-verified webhook body.
+	 * @param string $delivery_id Signed X-Shoppex-Delivery id.
 	 * @return string Outcome: `unmatched`, `applied` or `ignored`.
 	 */
-	public static function process( array $payload ) {
+	public static function process( array $payload, $delivery_id ) {
 		$event = isset( $payload['event'] ) ? (string) $payload['event'] : '';
 		$data  = isset( $payload['data'] ) && is_array( $payload['data'] ) ? $payload['data'] : array();
 
@@ -98,9 +100,13 @@ class Shoppex_Webhook_Handler {
 			return 'unmatched';
 		}
 
-		// Retries and manual resends repeat the frozen payload under a new
-		// delivery id. Applied again, it would undo what the merchant did since,
-		// e.g. hold an order they released after reviewing a dispute.
+		// A repeated delivery, applied again, would undo what the merchant did
+		// since, e.g. hold an order they released after reviewing a dispute.
+		// Shoppex retries a delivery (five attempts over about 30 minutes) under
+		// the same signed delivery id, and a payload it rebuilds carries a fresh
+		// created_at. A retry of a failed delivery from the Shoppex dashboard
+		// gets a new delivery id but repeats the frozen payload. Each key is
+		// kept on the order, so neither expires before Shoppex stops sending.
 		$event_id  = hash(
 			'sha256',
 			wp_json_encode(
@@ -114,13 +120,14 @@ class Shoppex_Webhook_Handler {
 		);
 		$processed = $order->get_meta( WC_Gateway_Shoppex::META_EVENTS );
 		$processed = is_array( $processed ) ? $processed : array();
-		if ( in_array( $event_id, $processed, true ) ) {
+		if ( in_array( $event_id, $processed, true ) || in_array( $delivery_id, $processed, true ) ) {
 			return 'ignored';
 		}
 
 		$applied     = self::apply_event( $order, $event, $data );
 		$processed[] = $event_id;
-		$order->update_meta_data( WC_Gateway_Shoppex::META_EVENTS, array_slice( $processed, -50 ) );
+		$processed[] = $delivery_id;
+		$order->update_meta_data( WC_Gateway_Shoppex::META_EVENTS, array_slice( $processed, -100 ) );
 		$order->save();
 		return $applied ? 'applied' : 'ignored';
 	}
@@ -271,6 +278,9 @@ class Shoppex_Webhook_Handler {
 		// total_display includes buyer-paid gateway fees and tips, so it may
 		// exceed the order total; it may never fall short of it.
 		if ( strtoupper( (string) $order->get_currency() ) !== $currency || null === $paid || $paid < self::to_cents( $order->get_total() ) ) {
+			// This invoice took money even though the order is not complete: a
+			// merchant who releases the order refunds through it.
+			$order->update_meta_data( WC_Gateway_Shoppex::META_HELD_UNIQID, $uniqid );
 			$order->update_status(
 				'on-hold',
 				sprintf(
@@ -288,6 +298,7 @@ class Shoppex_Webhook_Handler {
 
 		// Refunds go to the invoice that actually took the money.
 		$order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, $uniqid );
+		$order->delete_meta_data( WC_Gateway_Shoppex::META_HELD_UNIQID );
 		$order->update_meta_data( WC_Gateway_Shoppex::META_LAST_STATUS, $status );
 		$gateway = isset( $data['gateway'] ) ? (string) $data['gateway'] : '';
 		if ( '' !== $gateway ) {

@@ -8,23 +8,26 @@ const [script, embed] = process.argv.slice(2);
 function element(hidden) {
 	return { hidden, addEventListener() {} };
 }
-const error = element(true);
+const redirecting = element(true);
 const payButton = element(false);
+const elements = { '[data-shoppex-pay-open]': payButton, '[data-shoppex-pay-redirecting]': redirecting };
 const root = {
-	querySelector: (selector) => (selector === '[data-shoppex-pay-open]' ? payButton : error),
+	querySelector: (selector) => elements[selector] || null,
 };
 const document = {
 	getElementById: (id) => (id === 'shoppex-pay-overlay' ? root : null),
 	addEventListener() {},
 };
 const opened = [];
+const navigated = [];
 const window = {
 	shoppexPayOverlay: {
 		invoiceId: '3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70',
 		checkoutBaseUrl: 'https://checkout.shoppex.io',
+		paymentUrl: 'https://checkout.shoppex.io/invoice/3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70',
 		returnUrl: 'https://store.test/checkout/order-received/1234/',
 	},
-	location: { assign() {} },
+	location: { assign: (url) => navigated.push(url) },
 };
 if (embed !== 'missing') {
 	// The embed SDK before invoice mode: open() exists but needs items or groupId.
@@ -35,4 +38,6 @@ if (embed !== 'missing') {
 }
 
 vm.runInNewContext(fs.readFileSync(script, 'utf8'), { window, document });
-process.stdout.write(JSON.stringify({ error_shown: !error.hidden, pay_button_shown: !payButton.hidden, opened }));
+process.stdout.write(
+	JSON.stringify({ redirecting_shown: !redirecting.hidden, pay_button_shown: !payButton.hidden, opened, navigated }),
+);
