@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [1.1.0] - Unreleased
 
 ### Added
-- *Checkout display* setting: *Redirect* (default) or *Overlay window*. The overlay opens the Shoppex invoice with `Shoppex.open({ invoiceId })` on the order payment page (classic and Blocks checkout) and always links the full payment page. When the embed script does not load, or has no invoice mode yet (`Shoppex.supports.invoiceId`), the buyer is sent on to the full payment page with a neutral "Redirecting you to the secure payment page…" message instead of an error.
+- *Checkout display* setting: *Redirect* (default) or *Overlay window*. The overlay opens the Shoppex invoice with `Shoppex.open({ invoiceId })` on the order payment page (classic and Blocks checkout) and always links the full payment page. When the embed script does not load, or has no invoice mode yet (`Shoppex.supports.invoiceId`), the buyer is sent on to the full payment page with a neutral "Redirecting you to the secure payment page…" message instead of an error; the redirect replaces the order payment page in the history, so Back does not bounce the buyer forward again.
 - PHPUnit suite with WordPress/WooCommerce doubles (`composer test`), run in CI.
 
 ### Security
@@ -23,7 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Checkout session idempotency: a retry of a create whose answer was lost replays that session; any later attempt for the order (changed cart on a reused pending order, or a return after the session expired) gets a new session instead of a 422 or an expired invoice.
 - Refund amounts are sent with two decimals (stores with three price decimals got a validation error).
 - A late payment on a refunded order is reported for a manual refund instead of retargeting refunds.
-- An order put on hold for a short or foreign-currency payment remembers the invoice that paid, and refunds go to that invoice instead of the order's newest checkout session.
+- An order put on hold for a short or foreign-currency payment remembers the invoice that paid, and refunds go to that invoice instead of the order's newest checkout session. A dispute, cancellation or update of that invoice applies to the order like one of its current invoice.
 - Refund idempotency keys come from the WooCommerce refund record, so a refund recorded again after its record was deleted is sent to Shoppex instead of replaying the first one. A retry after a lost answer reuses the lost key. When Shoppex answers that retry with the stored response of the earlier refund (`idempotency-status: cached`), the plugin records no new refund and tells the merchant that no new refund was sent, so a lost refund the merchant already recorded by hand is not counted twice; the next attempt sends a new refund.
 - Dashboard links point at current routes.
 

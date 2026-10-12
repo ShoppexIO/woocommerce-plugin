@@ -198,6 +198,17 @@ final class WebhookProcessTest extends TestCase {
 		$this->assertSame( '/dev/v1/orders/' . $older . '/refund', $this->refund( '9.99' ) );
 	}
 
+	public function test_a_dispute_on_the_invoice_that_took_a_short_payment_holds_the_released_order() {
+		// The money came through an older checkout session than the order's
+		// newest one. Its dispute only left a note, as if it were a stale invoice.
+		$older = '9b1d2c3e-4f50-4a6b-8c7d-0e1f2a3b4c5d';
+		$this->deliver( $this->payload( 'order:paid', array( 'uniqid' => $older, 'total_display' => 9.99 ) ) );
+		$this->order->update_status( 'processing' );
+
+		$this->assertSame( 'applied', $this->deliver( $this->payload( 'order:disputed', array( 'uniqid' => $older, 'status' => 'DISPUTED' ) ) ) );
+		$this->assertSame( 'on-hold', $this->order->get_status() );
+	}
+
 	public function test_a_full_payment_after_a_short_one_takes_the_refunds() {
 		$older = '9b1d2c3e-4f50-4a6b-8c7d-0e1f2a3b4c5d';
 		$this->deliver( $this->payload( 'order:paid', array( 'uniqid' => $older, 'total_display' => 9.99 ) ) );

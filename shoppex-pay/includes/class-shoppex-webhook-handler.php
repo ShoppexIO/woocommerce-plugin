@@ -152,8 +152,13 @@ class Shoppex_Webhook_Handler {
 
 		// Every other event describes one invoice. When the buyer started a newer
 		// checkout for the same order, the old invoice expiring must not cancel
-		// the order they are paying right now.
-		if ( '' === $uniqid || $uniqid !== (string) $order->get_meta( WC_Gateway_Shoppex::META_UNIQID ) ) {
+		// the order they are paying right now. An invoice that took a short
+		// payment holds money of this order too, so its dispute must hold it.
+		$invoices = array(
+			(string) $order->get_meta( WC_Gateway_Shoppex::META_UNIQID ),
+			(string) $order->get_meta( WC_Gateway_Shoppex::META_HELD_UNIQID ),
+		);
+		if ( '' === $uniqid || ! in_array( $uniqid, $invoices, true ) ) {
 			$order->add_order_note(
 				sprintf(
 					/* translators: 1: event name, 2: Shoppex invoice id. */
