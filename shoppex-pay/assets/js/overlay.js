@@ -21,7 +21,9 @@
 	function goToPaymentPage() {
 		redirecting.hidden = false;
 		payButton.hidden = true;
-		window.location.assign( config.paymentUrl );
+		// Replace this page in the history: it is sent no-store, so Back would
+		// reload it and redirect forward again.
+		window.location.replace( config.paymentUrl );
 	}
 
 	function open() {

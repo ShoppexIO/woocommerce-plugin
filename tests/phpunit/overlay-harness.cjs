@@ -19,7 +19,7 @@ const document = {
 	addEventListener() {},
 };
 const opened = [];
-const navigated = [];
+const replaced = [];
 const window = {
 	shoppexPayOverlay: {
 		invoiceId: '3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70',
@@ -27,7 +27,8 @@ const window = {
 		paymentUrl: 'https://checkout.shoppex.io/invoice/3f0e8a52-6c1d-4b7e-9a35-2d4c8f1b6e70',
 		returnUrl: 'https://store.test/checkout/order-received/1234/',
 	},
-	location: { assign: (url) => navigated.push(url) },
+	// Only replace(): an assign() would leave the order payment page in the history.
+	location: { replace: (url) => replaced.push(url) },
 };
 if (embed !== 'missing') {
 	// The embed SDK before invoice mode: open() exists but needs items or groupId.
@@ -39,5 +40,5 @@ if (embed !== 'missing') {
 
 vm.runInNewContext(fs.readFileSync(script, 'utf8'), { window, document });
 process.stdout.write(
-	JSON.stringify({ redirecting_shown: !redirecting.hidden, pay_button_shown: !payButton.hidden, opened, navigated }),
+	JSON.stringify({ redirecting_shown: !redirecting.hidden, pay_button_shown: !payButton.hidden, opened, replaced }),
 );
