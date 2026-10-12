@@ -92,7 +92,7 @@ The order is marked paid only by the verified webhook. The overlay's browser eve
 
 ### Overlay window
 
-The overlay loads `https://checkout.shoppex.io/embed/embed.iife.js` on the order payment page. If the script cannot load (blocked by an extension or a Content Security Policy), the page says so and the customer continues on the full payment page through the link that is always shown. Payment methods that need a new tab (PayPal, some bank redirects) open one from the overlay; when the browser blocks it, the checkout navigates the current tab instead. If your store sends a `Content-Security-Policy`, allow `https://checkout.shoppex.io` in `script-src` and `frame-src`.
+The overlay loads `https://checkout.shoppex.io/embed/embed.iife.js` on the order payment page. If the script cannot load (blocked by an extension or a Content Security Policy), or the loaded script cannot open an invoice yet, the customer is sent on to the full payment page; a link to it is always shown as well. Payment methods that need a new tab (PayPal, some bank redirects) open one from the overlay; when the browser blocks it, the checkout navigates the current tab instead. If your store sends a `Content-Security-Policy`, allow `https://checkout.shoppex.io` in `script-src` and `frame-src`.
 
 ## Refunds
 

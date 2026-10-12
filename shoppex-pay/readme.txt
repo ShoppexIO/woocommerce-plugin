@@ -72,13 +72,15 @@ Yes. Set *Checkout display* to *Overlay window*. The order payment page then ope
 == Changelog ==
 
 = 1.1.0 =
-* Add: Checkout display setting with an Overlay window option.
+* Add: Checkout display setting with an Overlay window option. When the payment window cannot open, the buyer is sent on to the full payment page.
 * Security: webhooks are verified with the timestamped `X-Shoppex-Signature-V2` signature; the event name is read from the signed body.
 * Fix: an order is completed only when Shoppex reports a completed payment of at least the order total in the order currency.
 * Fix: webhooks now find their order through the checkout session metadata Shoppex sends.
-* Fix: disputes on paid orders put the order on hold.
+* Fix: disputes on paid orders put the order on hold. A retried webhook is applied once; deliveries are deduplicated by their signed delivery id.
 * Fix: a changed cart on a reused pending order no longer fails checkout; two refunds of the same amount are both sent.
-* Removed: the White-label checkout setting, which had no effect.
+* Fix: when Shoppex answers a refund with the stored result of an earlier, lost refund, no new refund is recorded and the merchant is told so.
+* Fix: refunds of an order held for a short payment go to the invoice that paid.
+* Removed: the White-label checkout setting (`white_label`). No behaviour change: the checkout session never returned a branded URL.
 
 = 1.0.1 =
 * Fix: `processing` status and all WC paid statuses are now protected from late `order:cancelled` webhooks. Previously a delayed cancellation event could flip a paid order back to cancelled.
