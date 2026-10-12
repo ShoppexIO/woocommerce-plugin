@@ -13,6 +13,12 @@ defined( 'ABSPATH' ) || exit;
 class Shoppex_Webhook_Handler {
 
 	/**
+	 * Accepted clock difference between Shoppex and this server, in seconds.
+	 * Every delivery attempt is signed with a fresh timestamp, so retries pass.
+	 */
+	const SIGNATURE_TOLERANCE = 300;
+
+	/**
 	 * Hook registration — called from the main plugin bootstrap.
 	 */
 	public static function register() {
@@ -25,7 +31,6 @@ class Shoppex_Webhook_Handler {
 	public static function handle() {
 		$gateway = self::get_gateway();
 		if ( ! $gateway ) {
-			status_header( 503 );
 			self::respond( array( 'error' => 'gateway_unavailable' ), 503 );
 			return;
 		}
@@ -35,17 +40,24 @@ class Shoppex_Webhook_Handler {
 			$raw_body = '';
 		}
 
-		$signature = self::header( 'X-Shoppex-Signature' );
-		$secret    = (string) $gateway->webhook_secret;
-
+		$secret = (string) $gateway->webhook_secret;
 		if ( '' === $secret ) {
 			self::log( $gateway, 'Rejected webhook: no webhook_secret configured.' );
 			self::respond( array( 'error' => 'webhook_not_configured' ), 503 );
 			return;
 		}
 
-		if ( ! self::verify_signature( $raw_body, $signature, $secret ) ) {
-			self::log( $gateway, 'Rejected webhook: invalid signature.' );
+		$delivery_id = self::header( 'X-Shoppex-Delivery' );
+		$verified    = self::verify_signature(
+			$raw_body,
+			self::header( 'X-Shoppex-Signature-V2' ),
+			$delivery_id,
+			self::header( 'X-Shoppex-Timestamp' ),
+			$secret,
+			time()
+		);
+		if ( ! $verified ) {
+			self::log( $gateway, 'Rejected webhook: invalid or expired signature.' );
 			self::respond( array( 'error' => 'invalid_signature' ), 401 );
 			return;
 		}
@@ -56,38 +68,68 @@ class Shoppex_Webhook_Handler {
 			return;
 		}
 
-		$event = self::header( 'X-Shoppex-Event' );
-		if ( '' === $event && isset( $payload['event'] ) ) {
-			$event = (string) $payload['event'];
-		}
+		$result = self::process( $payload, $delivery_id );
+		self::log( $gateway, sprintf( 'Webhook %s: %s.', isset( $payload['event'] ) ? (string) $payload['event'] : '', $result ) );
+		// Unknown orders are acknowledged too: a retry would not find them either.
+		self::respond(
+			array(
+				'ok'     => true,
+				'result' => $result,
+			),
+			200
+		);
+	}
 
-		$data = isset( $payload['data'] ) && is_array( $payload['data'] ) ? $payload['data'] : array();
+	/**
+	 * Apply a verified webhook payload to its WooCommerce order.
+	 *
+	 * The event name comes from the signed body. The X-Shoppex-Event header is
+	 * not covered by the signature, so trusting it would let anyone turn a
+	 * captured `order:created` delivery into `order:paid`.
+	 *
+	 * @param array  $payload     Decoded, signature-verified webhook body.
+	 * @param string $delivery_id Signed X-Shoppex-Delivery id.
+	 * @return string Outcome: `unmatched`, `applied` or `ignored`.
+	 */
+	public static function process( array $payload, $delivery_id ) {
+		$event = isset( $payload['event'] ) ? (string) $payload['event'] : '';
+		$data  = isset( $payload['data'] ) && is_array( $payload['data'] ) ? $payload['data'] : array();
 
 		$order = self::resolve_order( $data );
 		if ( ! $order ) {
-			self::log( $gateway, sprintf( 'Webhook %s: no matching WC order found.', $event ) );
-			// We ACK so the webhook doesn't get retried forever — unknown orders
-			// are not a transient condition.
-			self::respond(
+			return 'unmatched';
+		}
+
+		// A repeated delivery, applied again, would undo what the merchant did
+		// since, e.g. hold an order they released after reviewing a dispute.
+		// Shoppex retries a delivery (five attempts over about 30 minutes) under
+		// the same signed delivery id, and a payload it rebuilds carries a fresh
+		// created_at. A retry of a failed delivery from the Shoppex dashboard
+		// gets a new delivery id but repeats the frozen payload. Each key is
+		// kept on the order, so neither expires before Shoppex stops sending.
+		$event_id  = hash(
+			'sha256',
+			wp_json_encode(
 				array(
-					'ok'      => true,
-					'matched' => false,
-				),
-				200
-			);
-			return;
+					$event,
+					isset( $data['uniqid'] ) ? (string) $data['uniqid'] : '',
+					isset( $data['status'] ) ? (string) $data['status'] : '',
+					isset( $payload['created_at'] ) ? (string) $payload['created_at'] : '',
+				)
+			)
+		);
+		$processed = $order->get_meta( WC_Gateway_Shoppex::META_EVENTS );
+		$processed = is_array( $processed ) ? $processed : array();
+		if ( in_array( $event_id, $processed, true ) || in_array( $delivery_id, $processed, true ) ) {
+			return 'ignored';
 		}
 
-		self::apply_event( $order, $event, $data );
-
-		$order->update_meta_data( WC_Gateway_Shoppex::META_LAST_STATUS, isset( $data['status'] ) ? (string) $data['status'] : '' );
-		if ( isset( $data['gateway'] ) ) {
-			$order->update_meta_data( WC_Gateway_Shoppex::META_PAYMENT_METHOD, (string) $data['gateway'] );
-		}
+		$applied     = self::apply_event( $order, $event, $data );
+		$processed[] = $event_id;
+		$processed[] = $delivery_id;
+		$order->update_meta_data( WC_Gateway_Shoppex::META_EVENTS, array_slice( $processed, -100 ) );
 		$order->save();
-
-		self::log( $gateway, sprintf( 'Handled webhook %s for WC order #%d.', $event, $order->get_id() ) );
-		self::respond( array( 'ok' => true ), 200 );
+		return $applied ? 'applied' : 'ignored';
 	}
 
 	/**
@@ -95,25 +137,65 @@ class Shoppex_Webhook_Handler {
 	 *
 	 * @param WC_Order $order WooCommerce order.
 	 * @param string   $event Event name, e.g. order:paid.
-	 * @param array    $data  Webhook data.data payload.
+	 * @param array    $data  Webhook data payload.
+	 * @return bool Whether the order changed.
 	 */
 	private static function apply_event( $order, $event, array $data ) {
+		$uniqid = isset( $data['uniqid'] ) ? (string) $data['uniqid'] : '';
 		$status = isset( $data['status'] ) ? strtoupper( (string) $data['status'] ) : '';
 
-		// Short-circuit: once an order is paid, refunded, or cancelled on our
-		// side we don't flip-flop it on out-of-order webhook arrivals.
-		// `processing` + `completed` both mean "paid" in WooCommerce — the
-		// distinction is whether the product ships (processing = physical to
-		// ship; completed = virtual/downloadable). Both must be protected from
-		// a late `order:cancelled` from Shoppex.
-		$paid_or_terminal = array_merge(
-			array( 'processing', 'completed', 'refunded', 'cancelled' ),
-			(array) wc_get_is_paid_statuses()
-		);
-		$paid_or_terminal = array_unique( array_filter( $paid_or_terminal ) );
+		// A payment is money received, whichever Shoppex invoice of this order it
+		// came through.
+		if ( 'order:paid' === $event ) {
+			return self::apply_paid( $order, $uniqid, $status, $data );
+		}
 
-		if ( in_array( $order->get_status(), $paid_or_terminal, true )
-			&& 'order:paid' !== $event ) {
+		// Every other event describes one invoice. When the buyer started a newer
+		// checkout for the same order, the old invoice expiring must not cancel
+		// the order they are paying right now. An invoice that took a short
+		// payment holds money of this order too, so its dispute must hold it.
+		$invoices = array(
+			(string) $order->get_meta( WC_Gateway_Shoppex::META_UNIQID ),
+			(string) $order->get_meta( WC_Gateway_Shoppex::META_HELD_UNIQID ),
+		);
+		if ( '' === $uniqid || ! in_array( $uniqid, $invoices, true ) ) {
+			$order->add_order_note(
+				sprintf(
+					/* translators: 1: event name, 2: Shoppex invoice id. */
+					__( 'Shoppex Pay: ignored webhook %1$s for invoice %2$s — the order now uses a different Shoppex invoice.', 'shoppex-pay' ),
+					$event,
+					$uniqid
+				)
+			);
+			return false;
+		}
+
+		$order->update_meta_data( WC_Gateway_Shoppex::META_LAST_STATUS, $status );
+
+		// The explicit statuses survive a filter that replaces the paid statuses.
+		$paid = array_unique( array_merge( array( 'processing', 'completed' ), (array) wc_get_is_paid_statuses() ) );
+
+		// Only a paid order can be disputed, so a dispute must get past the
+		// paid-order guard below. DISPUTED never means paid: hold the order.
+		// Any other status (refunded, cancelled, already on hold) stays as it is.
+		if ( 'order:disputed' === $event ) {
+			if ( ! $order->has_status( $paid ) ) {
+				$order->add_order_note(
+					sprintf(
+						/* translators: %s: order status. */
+						__( 'Shoppex Pay: dispute reported for an order in status %s; the status was not changed.', 'shoppex-pay' ),
+						$order->get_status()
+					)
+				);
+				return false;
+			}
+			$order->update_status( 'on-hold', __( 'Shoppex Pay: payment disputed — manual review required.', 'shoppex-pay' ) );
+			return true;
+		}
+
+		// Once an order is paid, refunded or cancelled here, a late or
+		// out-of-order event must not move it back.
+		if ( $order->has_status( array_merge( $paid, array( 'refunded', 'cancelled' ) ) ) ) {
 			$order->add_order_note(
 				sprintf(
 					/* translators: 1: event name, 2: status code. */
@@ -122,70 +204,25 @@ class Shoppex_Webhook_Handler {
 					$status
 				)
 			);
-			return;
+			return false;
 		}
 
 		switch ( $event ) {
-			case 'order:paid':
-				if ( ! $order->is_paid() ) {
-					$txn_id = isset( $data['uniqid'] ) ? (string) $data['uniqid'] : '';
-					$order->payment_complete( $txn_id );
-					$order->add_order_note(
-						sprintf(
-							/* translators: %s: gateway name. */
-							__( 'Shoppex Pay: payment received via %s.', 'shoppex-pay' ),
-							isset( $data['gateway'] ) ? (string) $data['gateway'] : 'shoppex'
-						)
-					);
-				}
-				break;
-
 			case 'order:partial':
-				$order->update_status(
-					'on-hold',
-					__( 'Shoppex Pay: partial payment received, awaiting remainder.', 'shoppex-pay' )
-				);
-				break;
+				$order->update_status( 'on-hold', __( 'Shoppex Pay: partial payment received, awaiting remainder.', 'shoppex-pay' ) );
+				return true;
 
 			case 'order:cancelled':
-				$order->update_status(
-					'cancelled',
-					__( 'Shoppex Pay: order cancelled / expired.', 'shoppex-pay' )
-				);
-				break;
-
-			case 'order:disputed':
-				$order->update_status(
-					'on-hold',
-					__( 'Shoppex Pay: order disputed — manual review required.', 'shoppex-pay' )
-				);
-				break;
+				$order->update_status( 'cancelled', __( 'Shoppex Pay: order cancelled / expired.', 'shoppex-pay' ) );
+				return true;
 
 			case 'order:created':
 			case 'order:updated':
-				if ( 'PENDING' === $status || 'WAITING_FOR_CONFIRMATIONS' === $status ) {
-					if ( 'pending' === $order->get_status() ) {
-						// Already pending — just add a trail.
-						$order->add_order_note(
-							sprintf(
-								/* translators: 1: event name, 2: status code. */
-								__( 'Shoppex Pay: %1$s (%2$s).', 'shoppex-pay' ),
-								$event,
-								$status
-							)
-						);
-					} else {
-						$order->update_status(
-							'on-hold',
-							sprintf(
-								/* translators: %s: status code. */
-								__( 'Shoppex Pay: awaiting confirmation (%s).', 'shoppex-pay' ),
-								$status
-							)
-						);
-					}
+				if ( 'WAITING_FOR_CONFIRMATIONS' === $status && ! $order->has_status( 'on-hold' ) ) {
+					$order->update_status( 'on-hold', __( 'Shoppex Pay: payment sent, awaiting blockchain confirmations.', 'shoppex-pay' ) );
+					return true;
 				}
-				break;
+				return false;
 
 			default:
 				$order->add_order_note(
@@ -196,97 +233,188 @@ class Shoppex_Webhook_Handler {
 						$status
 					)
 				);
+				return false;
 		}
 	}
 
 	/**
-	 * Find the WC order referenced by the webhook.
+	 * Complete the order for a paid Shoppex invoice — once, and only when the
+	 * invoice paid at least the order total in the order currency.
 	 *
-	 * Matching order:
-	 *   1) data.custom_fields.wc_order_id (set by us in process_payment)
-	 *   2) Fallback: meta lookup on _shoppex_uniqid (HPOS-aware).
+	 * @param WC_Order $order  WooCommerce order.
+	 * @param string   $uniqid Shoppex invoice id.
+	 * @param string   $status Invoice status from the payload.
+	 * @param array    $data   Webhook data payload.
+	 * @return bool Whether the order changed.
+	 */
+	private static function apply_paid( $order, $uniqid, $status, array $data ) {
+		// Shoppex retries deliver the same frozen payload; payment_complete()
+		// stored the invoice id as the transaction id the first time.
+		if ( '' === $uniqid || $uniqid === (string) $order->get_transaction_id() ) {
+			return false;
+		}
+
+		if ( 'COMPLETED' !== $status ) {
+			$order->add_order_note(
+				sprintf(
+					/* translators: 1: Shoppex invoice id, 2: status code. */
+					__( 'Shoppex Pay: ignored order:paid for invoice %1$s with status %2$s.', 'shoppex-pay' ),
+					$uniqid,
+					$status
+				)
+			);
+			return false;
+		}
+
+		// payment_complete() leaves a refunded order alone, so it counts as paid.
+		if ( $order->is_paid() || $order->has_status( 'refunded' ) ) {
+			$order->add_order_note(
+				sprintf(
+					/* translators: %s: Shoppex invoice id. */
+					__( 'Shoppex Pay: invoice %s was paid, but this order is already paid or refunded. Refund the second payment in Shoppex.', 'shoppex-pay' ),
+					$uniqid
+				)
+			);
+			return false;
+		}
+
+		$currency = isset( $data['currency'] ) ? strtoupper( (string) $data['currency'] ) : '';
+		$paid     = isset( $data['total_display'] ) && is_numeric( $data['total_display'] ) ? self::to_cents( $data['total_display'] ) : null;
+		// total_display includes buyer-paid gateway fees and tips, so it may
+		// exceed the order total; it may never fall short of it.
+		if ( strtoupper( (string) $order->get_currency() ) !== $currency || null === $paid || $paid < self::to_cents( $order->get_total() ) ) {
+			// This invoice took money even though the order is not complete: a
+			// merchant who releases the order refunds through it.
+			$order->update_meta_data( WC_Gateway_Shoppex::META_HELD_UNIQID, $uniqid );
+			$order->update_status(
+				'on-hold',
+				sprintf(
+					/* translators: 1: Shoppex invoice id, 2: paid amount, 3: paid currency, 4: order total, 5: order currency. */
+					__( 'Shoppex Pay: invoice %1$s reports a payment of %2$s %3$s, but the order total is %4$s %5$s. Check the payment in Shoppex before you fulfil the order.', 'shoppex-pay' ),
+					$uniqid,
+					null === $paid ? '?' : number_format( $paid / 100, 2, '.', '' ),
+					'' === $currency ? '?' : $currency,
+					$order->get_total(),
+					$order->get_currency()
+				)
+			);
+			return true;
+		}
+
+		// Refunds go to the invoice that actually took the money.
+		$order->update_meta_data( WC_Gateway_Shoppex::META_UNIQID, $uniqid );
+		$order->delete_meta_data( WC_Gateway_Shoppex::META_HELD_UNIQID );
+		$order->update_meta_data( WC_Gateway_Shoppex::META_LAST_STATUS, $status );
+		$gateway = isset( $data['gateway'] ) ? (string) $data['gateway'] : '';
+		if ( '' !== $gateway ) {
+			$order->update_meta_data( WC_Gateway_Shoppex::META_PAYMENT_METHOD, $gateway );
+		}
+		$order->payment_complete( $uniqid );
+		$order->add_order_note(
+			sprintf(
+				/* translators: %s: gateway name. */
+				__( 'Shoppex Pay: payment received via %s.', 'shoppex-pay' ),
+				'' === $gateway ? 'Shoppex' : $gateway
+			)
+		);
+		return true;
+	}
+
+	/**
+	 * Amount in cents, rounded half up like Shoppex stores totals.
+	 *
+	 * @param string|float $amount Decimal amount.
+	 * @return int
+	 */
+	private static function to_cents( $amount ) {
+		return (int) round( (float) $amount * 100 );
+	}
+
+	/**
+	 * Find the WC order referenced by the webhook through the metadata the
+	 * plugin sent with the checkout session. The order key must match, so a
+	 * second store sharing the Shoppex shop (staging) cannot move this order.
 	 *
 	 * @param array $data Webhook data payload.
 	 * @return WC_Order|null
 	 */
 	private static function resolve_order( array $data ) {
-		$custom = self::custom_fields( $data );
-
-		if ( isset( $custom['wc_order_id'] ) ) {
-			$order = wc_get_order( (int) $custom['wc_order_id'] );
-			if ( $order instanceof WC_Order ) {
-				// Defensive key check if available — guards against webhook replay
-				// across environments using the same shop.
-				$expected = isset( $custom['wc_order_key'] ) ? (string) $custom['wc_order_key'] : '';
-				if ( '' === $expected || hash_equals( $expected, (string) $order->get_order_key() ) ) {
-					return $order;
-				}
-			}
+		$fields = self::custom_fields( $data );
+		if ( ! isset( $fields['wc_order_id'], $fields['wc_order_key'] ) ) {
+			return null;
 		}
 
-		if ( isset( $data['uniqid'] ) && '' !== $data['uniqid'] ) {
-			$orders = wc_get_orders(
-				array(
-					'limit'      => 1,
-					'meta_key'   => WC_Gateway_Shoppex::META_UNIQID,
-					'meta_value' => (string) $data['uniqid'],
-				)
-			);
-			if ( ! empty( $orders ) ) {
-				return $orders[0];
-			}
+		$order = wc_get_order( (int) $fields['wc_order_id'] );
+		if ( ! $order instanceof WC_Order || ! hash_equals( (string) $order->get_order_key(), $fields['wc_order_key'] ) ) {
+			return null;
 		}
-
-		return null;
+		return $order;
 	}
 
 	/**
-	 * Normalize the custom_fields field. Shoppex may send it as an array of
-	 * {name, value} pairs or as an associative array — we tolerate both.
+	 * Read the checkout session metadata. Shoppex stores it as
+	 * `{"customFields": [{"name": ..., "value": ...}]}` and sends that object.
 	 *
 	 * @param array $data Webhook data payload.
 	 * @return array Associative array name => value.
 	 */
 	private static function custom_fields( array $data ) {
-		if ( empty( $data['custom_fields'] ) ) {
-			return array();
-		}
-		$cf = $data['custom_fields'];
-
-		if ( is_string( $cf ) ) {
-			$decoded = json_decode( $cf, true );
-			$cf      = is_array( $decoded ) ? $decoded : array();
-		}
-
-		if ( ! is_array( $cf ) ) {
+		$list = isset( $data['custom_fields']['customFields'] ) ? $data['custom_fields']['customFields'] : null;
+		if ( ! is_array( $list ) ) {
 			return array();
 		}
 
-		$assoc = array();
-		foreach ( $cf as $key => $value ) {
-			if ( is_array( $value ) && isset( $value['name'] ) ) {
-				$assoc[ (string) $value['name'] ] = isset( $value['value'] ) ? (string) $value['value'] : '';
-			} elseif ( is_string( $key ) ) {
-				$assoc[ $key ] = is_scalar( $value ) ? (string) $value : '';
+		$fields = array();
+		foreach ( $list as $field ) {
+			if ( is_array( $field ) && isset( $field['name'], $field['value'] ) && is_scalar( $field['value'] ) ) {
+				$fields[ (string) $field['name'] ] = (string) $field['value'];
 			}
 		}
-		return $assoc;
+		return $fields;
 	}
 
 	/**
-	 * Constant-time HMAC-SHA512 verification.
+	 * Verify `X-Shoppex-Signature-V2`: HMAC-SHA256 over
+	 * `<delivery id>.<timestamp>.<raw body>`, with a fresh timestamp.
 	 *
-	 * @param string $body      Raw request body.
-	 * @param string $signature Header value.
-	 * @param string $secret    Shared secret.
+	 * @param string $body             Raw request body.
+	 * @param string $signature_header X-Shoppex-Signature-V2 value, `v1,t=<ts>,h=<hex>`.
+	 * @param string $delivery_id      X-Shoppex-Delivery value.
+	 * @param string $timestamp_header X-Shoppex-Timestamp value.
+	 * @param string $secret           Webhook secret.
+	 * @param int    $now              Current Unix time.
 	 * @return bool
 	 */
-	public static function verify_signature( $body, $signature, $secret ) {
-		if ( '' === $signature || '' === $secret ) {
+	public static function verify_signature( $body, $signature_header, $delivery_id, $timestamp_header, $secret, $now ) {
+		if ( '' === $secret || '' === $delivery_id || '' === $signature_header ) {
 			return false;
 		}
-		$expected = hash_hmac( 'sha512', $body, $secret );
-		return hash_equals( $expected, $signature );
+
+		$segments = array_map( 'trim', explode( ',', $signature_header ) );
+		if ( ! in_array( 'v1', $segments, true ) ) {
+			return false;
+		}
+		$fields = array();
+		foreach ( $segments as $segment ) {
+			if ( false !== strpos( $segment, '=' ) ) {
+				list( $key, $value ) = explode( '=', $segment, 2 );
+				$fields[ $key ]      = $value;
+			}
+		}
+
+		$timestamp = isset( $fields['t'] ) ? $fields['t'] : '';
+		$signature = isset( $fields['h'] ) ? strtolower( $fields['h'] ) : '';
+		if ( ! ctype_digit( $timestamp ) || $timestamp !== $timestamp_header ) {
+			return false;
+		}
+		if ( abs( (int) $now - (int) $timestamp ) > self::SIGNATURE_TOLERANCE ) {
+			return false;
+		}
+		if ( 1 !== preg_match( '/^[0-9a-f]{64}$/', $signature ) ) {
+			return false;
+		}
+
+		return hash_equals( hash_hmac( 'sha256', $delivery_id . '.' . $timestamp . '.' . $body, $secret ), $signature );
 	}
 
 	/**
@@ -298,7 +426,7 @@ class Shoppex_Webhook_Handler {
 	private static function header( $name ) {
 		$server_key = 'HTTP_' . strtoupper( str_replace( '-', '_', $name ) );
 		if ( isset( $_SERVER[ $server_key ] ) ) {
-			return trim( wp_unslash( (string) $_SERVER[ $server_key ] ) );
+			return trim( sanitize_text_field( wp_unslash( $_SERVER[ $server_key ] ) ) );
 		}
 		if ( function_exists( 'getallheaders' ) ) {
 			$headers = getallheaders();

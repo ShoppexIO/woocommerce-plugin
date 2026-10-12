@@ -33,13 +33,12 @@ Search for **Shoppex Pay** in *Plugins → Add New* and install.
 
 ## Configuration
 
-1. In the **Shoppex dashboard** go to *Settings → Developer Tools* and create a Dev API key (starts with `shx_`).
-2. Still in the Shoppex dashboard, create a webhook pointing at:
+1. In the **Shoppex dashboard** go to *Settings → Developer → API keys* and create a Dev API key (starts with `shx_`) with the `payments.write` and `orders.write` scopes.
+2. In *Settings → Developer → Webhooks*, create a webhook pointing at:
    ```
    https://YOUR-STORE.com/?wc-api=shoppex_webhook
    ```
    Subscribe to these events:
-   - `order:created`
    - `order:paid`
    - `order:partial`
    - `order:cancelled`
@@ -51,7 +50,7 @@ Search for **Shoppex Pay** in *Plugins → Add New* and install.
 3. In WooCommerce, go to *WooCommerce → Settings → Payments → Shoppex Pay* and fill in:
    - **API Key** — the `shx_...` key from step 1.
    - **Webhook Secret** — the secret from step 2.
-   - **White-label checkout** — leave off unless your Shoppex account has it enabled.
+   - **Checkout display** — *Redirect* (default) sends the customer to the Shoppex payment page. *Overlay window* keeps them on your store: the order payment page opens the Shoppex checkout in a window, with a link to the full payment page next to it.
    - Optional: **Order title prefix**, **Debug logging**.
 
 4. Save. You're done.
@@ -67,23 +66,33 @@ WooCommerce calls process_payment()
     ▼
 POST https://api.shoppex.io/dev/v1/checkout/sessions
     │  Authorization: Bearer shx_...
-    │  Idempotency-Key: woo_order_<id>
+    │  Idempotency-Key: woo_order_<id>_<hash of previous session + payload>
     │
     ▼
 Shoppex returns { data: { id, url, ... } }
     │
-    ▼
-Redirect customer to data.url
+    ├─ Redirect: customer goes to data.url
+    └─ Overlay:  customer goes to the WooCommerce order payment page,
+                 which runs Shoppex.open({ invoiceId: data.id })
     │
     ▼
-Customer pays on Shoppex hosted checkout
+Customer pays on the Shoppex checkout
     │
     ▼
-Shoppex POSTs webhook with X-Shoppex-Signature (HMAC-SHA512)
+Shoppex POSTs the webhook with X-Shoppex-Signature-V2
+(HMAC-SHA256 over <delivery id>.<timestamp>.<body>)
     │
     ▼
-Plugin verifies signature, maps event → WC order status
+Plugin verifies the signature and timestamp, finds the order by the
+metadata it sent (order id + order key), and on order:paid checks the
+paid amount and currency against the order before completing it.
 ```
+
+The order is marked paid only by the verified webhook. The overlay's browser events (`shoppex:success`, `shoppex:close`) only move the customer to the order-received page.
+
+### Overlay window
+
+The overlay loads `https://checkout.shoppex.io/embed/embed.iife.js` on the order payment page. If the script cannot load (blocked by an extension or a Content Security Policy), or the loaded script cannot open an invoice yet, the customer is sent on to the full payment page; a link to it is always shown as well. Payment methods that need a new tab (PayPal, some bank redirects) open one from the overlay; when the browser blocks it, the checkout navigates the current tab instead. If your store sends a `Content-Security-Policy`, allow `https://checkout.shoppex.io` in `script-src` and `frame-src`.
 
 ## Refunds
 
@@ -95,6 +104,7 @@ For other gateways (currently including cryptocurrency PSPs), Shoppex does not y
 
 ```bash
 composer install
+composer test       # PHPUnit (WordPress and WooCommerce doubles, no install needed)
 composer phpcs      # lint with WPCS + PHPCompatibility
 composer phpcbf     # auto-fix where possible
 ```
@@ -112,6 +122,7 @@ shoppex-pay/
   assets/
     images/logo.svg
     js/blocks-checkout.js
+    js/overlay.js                         # Opens the invoice in the Shoppex embed window
     css/checkout.css
   readme.txt                              # WordPress.org plugin directory listing
 ```

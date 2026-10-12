@@ -183,8 +183,8 @@ check(
 	logSnippet.includes('Response 201') && logSnippet.includes('"id":'),
 );
 check(
-	'Plugin sent white_label explicitly (not omitted)',
-	logSnippet.includes('"white_label":false') || logSnippet.includes('"white_label":true'),
+	'Plugin no longer sends white_label (the session schema has no such field)',
+	!logSnippet.includes('"white_label"'),
 );
 check(
 	'Plugin sent metadata.wc_order_id',
